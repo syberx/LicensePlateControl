@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: licenseplatecontrol-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=lpc
+      - POSTGRES_PASSWORD=lpc_secret_2026
+      - POSTGRES_DB=licenseplatecontrol
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - lpc-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: licenseplatecontrol-backend
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./volumes/events:/events
+    environment:
+      - DATABASE_URL=postgresql://lpc:lpc_secret_2026@postgres:5432/licenseplatecontrol
+      - ENGINE_URL=http://engine:8000
+      - API_KEY=secretmvpkey123
+      - HA_URL=http://homeassistant.local:8123
+      - HA_TOKEN=optional_long_lived_access_token
+      - HA_SERVICE=/api/services/cover/open_cover
+    depends_on:
+      - engine
+      - postgres
+    networks:
+      - lpc-network
+
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: licenseplatecontrol-engine
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./volumes/models:/models
+      - ./volumes/events:/events
+    networks:
+      - lpc-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: licenseplatecontrol-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - lpc-network
+
+volumes:
+  pgdata:
+
+
+networks:
+  lpc-network:
+    driver: bridge

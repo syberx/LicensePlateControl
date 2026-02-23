@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LicensePlateControl — Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        .nav {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-brand span {
+            color: #818cf8;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .nav-link {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-link.active {
+            background: rgba(129, 140, 248, 0.2);
+            color: #818cf8;
+        }
+
+        .nav-link:not(.active) {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        .header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .section-title {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: -0.5px;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .search-input {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            border-radius: 10px;
+            padding: 0.6rem 1rem;
+            font-size: 0.9rem;
+            font-family: 'Inter';
+            width: 250px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: #818cf8;
+            background: rgba(255, 255, 255, 0.12);
+            width: 300px;
+        }
+
+        .search-input::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .toggle-btn {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.5);
+            border-radius: 10px;
+            padding: 0.6rem 1rem;
+            font-size: 0.78rem;
+            font-family: 'Inter';
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .toggle-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+        }
+
+        .toggle-btn.active {
+            background: rgba(129, 140, 248, 0.2);
+            color: #818cf8;
+            border-color: #818cf8;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+
+        .icon-green {
+            background: rgba(52, 211, 153, 0.15);
+            color: #34d399;
+        }
+
+        .icon-blue {
+            background: rgba(96, 165, 250, 0.15);
+            color: #60a5fa;
+        }
+
+        .icon-purple {
+            background: rgba(167, 139, 250, 0.15);
+            color: #a78bfa;
+        }
+
+        .stat-info p {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.5);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.2rem;
+        }
+
+        .stat-info h4 {
+            font-size: 1.1rem;
+            color: #fff;
+            font-weight: 700;
+        }
+
+        /* Event Cards */
+        .events-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .event-card {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            overflow: hidden;
+            transition: all 0.2s;
+        }
+
+        .event-card:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .event-header {
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .event-primary {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .plate-text {
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: 1px;
+            font-family: 'Inter', monospace;
+        }
+
+        .plate-unknown {
+            color: #f87171;
+        }
+
+        .event-meta {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .event-secondary {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.5rem;
+            width: 140px;
+        }
+
+        .conf-text {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: right;
+            width: 100%;
+            margin-bottom: 2px;
+        }
+
+        .conf-bar-bg {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .conf-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+
+        .conf-high {
+            background: #34d399;
+        }
+
+        .conf-med {
+            background: #fbbf24;
+        }
+
+        .conf-low {
+            background: #f87171;
+        }
+
+        .status-chip {
+            padding: 0.3rem 0.6rem;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 0.25rem;
+            display: inline-block;
+        }
+
+        .status-allowed {
+            background: rgba(52, 211, 153, 0.15);
+            color: #34d399;
+        }
+
+        .status-denied {
+            background: rgba(248, 113, 113, 0.15);
+            color: #f87171;
+        }
+
+        /* Expanded Details */
+        .event-details {
+            padding: 0 1.5rem 1.5rem 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(0, 0, 0, 0.15);
+        }
+
+        .details-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .info-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .info-label {
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 500;
+        }
+
+        .info-val {
+            color: #fff;
+            font-weight: 600;
+            text-align: right;
+        }
+
+        /* Thumbnail Gallery */
+        .gallery-wrap {
+            margin-top: 1.25rem;
+        }
+
+        .gallery-header {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.75rem;
+        }
+
+        .gallery-stats {
+            font-weight: 400;
+            color: rgba(255, 255, 255, 0.35);
+            margin-left: 0.5rem;
+        }
+
+        .thumb-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+            gap: 8px;
+        }
+
+        .thumb-item {
+            position: relative;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            aspect-ratio: 1;
+            border: 2px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.2s;
+            background: #000;
+        }
+
+        .thumb-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+
+        .thumb-item:hover img {
+            opacity: 1;
+        }
+
+        .thumb-item:hover {
+            transform: scale(1.05);
+            z-index: 5;
+        }
+
+        /* Plate detected — green glow, larger */
+        .thumb-plate {
+            border-color: #34d399;
+            box-shadow: 0 0 12px rgba(52, 211, 153, 0.4);
+            grid-column: span 2;
+            grid-row: span 2;
+        }
+
+        .thumb-plate img {
+            opacity: 0.85;
+        }
+
+        .thumb-plate-label {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 3px 6px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #34d399;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-align: center;
+            letter-spacing: 0.5px;
+        }
+
+        /* Trigger star indicator */
+        .trigger-star {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            font-size: 1.2rem;
+            filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.8));
+            z-index: 10;
+            animation: pulse-star 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-star {
+
+            0%,
+            100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.2);
+            }
+        }
+
+        /* No plate — smaller, muted */
+        .thumb-noplat {
+            opacity: 0.5;
+        }
+
+        .thumb-noplat img {
+            filter: grayscale(40%);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 1rem;
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        /* Lightbox */
+        #lightbox {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        #lightbox.active {
+            display: flex;
+        }
+
+        #lightbox img {
+            max-width: 100%;
+            max-height: 100%;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .lightbox-close {
+            position: absolute;
+            top: 1.5rem;
+            right: 2rem;
+            color: #fff;
+            font-size: 2rem;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+
+        .lightbox-close:hover {
+            opacity: 1;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .header-controls {
+                width: 100%;
+            }
+
+            .search-input {
+                width: 100%;
+                flex: 1;
+            }
+
+            .thumb-grid {
+                grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+            }
+        }
+    </style>
+</head>
+
+<body x-data="dashboard()">
+    <nav class="nav">
+        <div class="nav-brand">License<span>Plate</span>Control</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link active">Dashboard</a>
+            <a href="/plates.html" class="nav-link">Kennzeichen</a>
+            <a href="/settings.html" class="nav-link">Einstellungen</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon icon-green">⚡</div>
+                <div class="stat-info">
+                    <p>Status</p>
+                    <h4>Aktiv</h4>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon icon-blue">📸</div>
+                <div class="stat-info">
+                    <p>Erkannte Events</p>
+                    <h4 x-text="events.length">0</h4>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon icon-purple">🚪</div>
+                <div class="stat-info">
+                    <p>Letzter Trigger</p>
+                    <h4 x-text="lastTriggerTime()">Nie</h4>
+                </div>
+            </div>
+        </div>
+
+        <div class="header-row">
+            <h1 class="section-title">Events</h1>
+            <div class="header-controls">
+                <input type="text" x-model="search" class="search-input" placeholder="🔍 Suchen (Kennzeichen...)">
+                <button class="toggle-btn" :class="showUnknown ? 'active' : ''" @click="showUnknown = !showUnknown">
+                    <span x-text="showUnknown ? '✓ Unerkannte sichtbar' : '👁 Unerkannte anzeigen'"></span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Event List -->
+        <div class="events-list">
+            <template x-if="filteredEvents().length === 0">
+                <div class="empty-state">
+                    <h3>Keine Events gefunden.</h3>
+                    <p style="margin-top:0.5rem;font-size:0.9rem;">Die Kamera hat bisher keine Bewegung aufgezeichnet.
+                    </p>
+                </div>
+            </template>
+
+            <template x-for="e in filteredEvents()" :key="e.id">
+                <div class="event-card">
+                    <div class="event-header" @click="toggleRow(e.id)">
+                        <!-- Status Border Indicator -->
+                        <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 4px;"
+                            :style="{ background: e.decision === 'allowed' ? '#34d399' : '#f87171' }"></div>
+
+                        <div class="event-primary" style="padding-left: 1rem;">
+                            <div class="plate-text" :class="e.detected_plate === 'UNKNOWN' ? 'plate-unknown' : ''"
+                                x-text="e.detected_plate"></div>
+                            <div class="event-meta">
+                                <span x-text="formatDate(e.timestamp)"></span>
+                            </div>
+                            <div class="status-chip"
+                                :class="e.decision === 'allowed' ? 'status-allowed' : 'status-denied'"
+                                x-text="e.decision === 'allowed' ? 'ERLAUBT' : 'VERWEIGERT'">
+                            </div>
+                        </div>
+
+                        <div class="event-secondary">
+                            <div class="conf-text" x-text="(parseFloat(e.confidence)*100).toFixed(0) + '% Konfidenz'">
+                            </div>
+                            <div class="conf-bar-bg">
+                                <div class="conf-bar-fill" :class="getConfClass(e.confidence)"
+                                    :style="'width: ' + (parseFloat(e.confidence)*100) + '%;'"></div>
+                            </div>
+                            <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px;">
+                                📸 <span x-text="e.image_count"></span>
+                                <span style="margin-left: 0.5rem;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Expanded Details -->
+                    <div class="event-details" x-show="openRows.includes(e.id)" x-transition>
+                        <div class="details-grid">
+                            <!-- Detailed Info -->
+                            <div class="info-list">
+                                <div class="info-item">
+                                    <span class="info-label">Erkanntes Kennzeichen</span>
+                                    <span class="info-val plate-text" style="font-size: 1rem;"
+                                        x-text="e.detected_plate"></span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Datenbank-Match</span>
+                                    <span class="info-val">
+                                        <template x-if="e.matched_plate">
+                                            <span style="color: #34d399;">✓ <span x-text="e.matched_plate"></span>
+                                                (<span x-text="(e.match_score*100).toFixed(0)"></span>%)
+                                                <template x-if="e.matched_plate_description">
+                                                    <span
+                                                        style="color: rgba(255,255,255,0.5); font-weight: 400; margin-left: 4px;">
+                                                        — <span x-text="e.matched_plate_description"></span>
+                                                    </span>
+                                                </template>
+                                            </span>
+                                        </template>
+                                        <template x-if="!e.matched_plate">
+                                            <span style="color: #f87171;">✗ Kein Match</span>
+                                        </template>
+                                    </span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Home Assistant Trigger</span>
+                                    <span class="info-val">
+                                        <span x-show="e.ha_triggered" style="color:#60a5fa;">✓ Ausgelöst</span>
+                                        <span x-show="!e.ha_triggered" style="color:rgba(255,255,255,0.4);">— Nicht
+                                            ausgelöst</span>
+                                    </span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Verarbeitungsdauer (Engine)</span>
+                                    <span class="info-val">
+                                        <span x-show="e.processing_time_ms !== null"
+                                            x-text="Number(e.processing_time_ms).toFixed(0) + ' ms'"></span>
+                                        <span x-show="e.processing_time_ms === null">??? ms</span>
+                                    </span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Serien-ID (Motion Burst)</span>
+                                    <span class="info-val"
+                                        style="font-family: monospace; font-size: 0.75rem; color: rgba(255,255,255,0.6);"
+                                        x-text="e.series_id || '-'"></span>
+                                </div>
+                            </div>
+
+                            <!-- Thumbnail Gallery -->
+                            <div class="gallery-wrap" x-data="{ images: [], loaded: false }" x-init="
+                                if (openRows.includes(e.id) && !loaded) {
+                                    fetch('/api/events/' + e.id + '/images')
+                                        .then(r => r.json())
+                                        .then(d => { images = d; loaded = true; })
+                                        .catch(err => console.error(err));
+                                }
+                            " x-effect="
+                                if (openRows.includes(e.id) && !loaded) {
+                                    fetch('/api/events/' + e.id + '/images')
+                                        .then(r => r.json())
+                                        .then(d => { images = d; loaded = true; });
+                                }
+                            ">
+                                <div class="gallery-header">
+                                    Bildanalyse
+                                    <span class="gallery-stats"
+                                        x-text="images.length + ' Bilder · ' + images.filter(i => i.has_plate).length + ' mit Kennzeichen'">
+                                    </span>
+                                </div>
+                                <div class="thumb-grid">
+                                    <template x-for="img in images" :key="img.id">
+                                        <div class="thumb-item" :class="img.has_plate ? 'thumb-plate' : 'thumb-noplat'"
+                                            @click="openLightbox('/api/images/db/' + img.id)">
+                                            <img :src="'/api/images/db/' + img.id" loading="lazy" alt="Event Image">
+                                            <template x-if="img.is_trigger">
+                                                <div class="trigger-star">⭐</div>
+                                            </template>
+                                            <template x-if="img.has_plate && img.detected_plate">
+                                                <div class="thumb-plate-label" x-text="img.detected_plate"></div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Lightbox -->
+    <div id="lightbox" @click="closeLightbox">
+        <div class="lightbox-close">&times;</div>
+        <img id="lightbox-img" src="" alt="Full size image">
+    </div>
+
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('dashboard', () => ({
+                events: [],
+                search: '',
+                openRows: [],
+                showUnknown: false,
+
+                init() {
+                    this.loadData();
+                    setInterval(() => this.loadData(), 5000);
+                },
+
+                async loadData() {
+                    try {
+                        const hideParam = this.showUnknown ? '' : '&hide_unknown=true';
+                        const res = await fetch('/api/events?limit=50' + hideParam);
+                        this.events = await res.json();
+                    } catch (e) {
+                        console.error('Failed to load events', e);
+                    }
+                },
+
+                filteredEvents() {
+                    if (this.search.trim() === '') return this.events;
+                    const term = this.search.toLowerCase();
+                    return this.events.filter(e =>
+                        (e.detected_plate && e.detected_plate.toLowerCase().includes(term)) ||
+                        (e.matched_plate && e.matched_plate.toLowerCase().includes(term)) ||
+                        (e.decision && e.decision.toLowerCase().includes(term))
+                    );
+                },
+
+                toggleRow(id) {
+                    if (this.openRows.includes(id)) {
+                        this.openRows = this.openRows.filter(r => r !== id);
+                    } else {
+                        this.openRows.push(id);
+                    }
+                },
+
+                formatDate(dateString) {
+                    const d = new Date(dateString);
+                    return d.toLocaleDateString('de-DE') + ', ' + d.toLocaleTimeString('de-DE');
+                },
+
+                getConfClass(confStr) {
+                    const conf = parseFloat(confStr);
+                    if (conf >= 0.8) return 'conf-high';
+                    if (conf >= 0.5) return 'conf-med';
+                    return 'conf-low';
+                },
+
+                lastTriggerTime() {
+                    const triggered = this.events.filter(e => e.ha_triggered);
+                    if (triggered.length === 0) return 'Nie';
+                    const d = new Date(triggered[0].timestamp);
+                    return d.toLocaleTimeString('de-DE');
+                },
+
+                openLightbox(src) {
+                    document.getElementById('lightbox-img').src = src;
+                    document.getElementById('lightbox').classList.add('active');
+                },
+
+                closeLightbox(e) {
+                    if (e.target.tagName !== 'IMG') {
+                        document.getElementById('lightbox').classList.remove('active');
+                    }
+                }
+            }));
+        });
+    </script>
+</body>
+
+</html>

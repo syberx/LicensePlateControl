@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LicensePlateControl — Einstellungen</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        .nav {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-brand span {
+            color: #818cf8;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .nav-link {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-link.active {
+            background: rgba(129, 140, 248, 0.2);
+            color: #818cf8;
+        }
+
+        .nav-link:not(.active) {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .api-input {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            border-radius: 8px;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.78rem;
+            font-family: 'Inter';
+            width: 160px;
+            outline: none;
+        }
+
+        .api-input::placeholder {
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        .api-input:focus {
+            border-color: #818cf8;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 1.5rem;
+        }
+
+        .settings-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .settings-card h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 0.5rem;
+        }
+
+        .settings-card p.desc {
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 1.5rem;
+            line-height: 1.4;
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-label {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.5);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.4rem;
+            display: block;
+        }
+
+        .form-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            font-size: 0.95rem;
+            font-family: 'Inter';
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .form-input::placeholder {
+            color: rgba(255, 255, 255, 0.25);
+        }
+
+        .form-input:focus {
+            border-color: #818cf8;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            border: none;
+            font-family: 'Inter';
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .msg {
+            margin-top: 1rem;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: none;
+            text-align: center;
+        }
+
+        .msg.success {
+            display: block;
+            background: rgba(52, 211, 153, 0.15);
+            color: #34d399;
+        }
+
+        .msg.error {
+            display: block;
+            background: rgba(248, 113, 113, 0.15);
+            color: #f87171;
+        }
+
+        @media (max-width: 768px) {
+            .nav {
+                padding: 0 1rem;
+            }
+
+            .container {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="nav">
+        <div class="nav-brand">License<span>Plate</span>Control</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">Dashboard</a>
+            <a href="/plates.html" class="nav-link">Kennzeichen</a>
+            <a href="/settings.html" class="nav-link active">Einstellungen</a>
+        </div>
+        <div class="nav-right">
+            <input type="password" id="api-key" class="api-input" placeholder="🔑 API Key (Lokal)"
+                onchange="localStorage.setItem('lpc_api_key', this.value)">
+        </div>
+    </nav>
+
+    <div class="container">
+        <h1 class="section-title">Einstellungen & Integrationen</h1>
+
+        <div class="settings-card">
+            <h3>Home Assistant Integration</h3>
+            <p class="desc">Konfiguriere den Webhook oder API-Aufruf zu Home Assistant. Dieser wird ausgeführt, wenn ein
+                autorisiertes Kennzeichen erkannt wird.</p>
+
+            <form id="ha-form" onsubmit="return false;">
+                <div class="form-group">
+                    <label class="form-label">Home Assistant URL</label>
+                    <input type="url" id="ha_url" class="form-input" placeholder="http://192.168.1.100:8123">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Dienst-Pfad (Service / Webhook)</label>
+                    <input type="text" id="ha_service" class="form-input" placeholder="/api/services/cover/open_cover">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Long-Lived Access Token (Bearer)</label>
+                    <input type="password" id="ha_token" class="form-input"
+                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                </div>
+
+                <button class="btn btn-primary" onclick="saveSettings()">Speichern</button>
+                <div class="msg" id="form-msg"></div>
+            </form>
+        </div>
+
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const saved = localStorage.getItem('lpc_api_key');
+            if (saved) document.getElementById('api-key').value = saved;
+            loadSettings();
+        });
+
+        function headers() {
+            return {
+                'Content-Type': 'application/json',
+                'X-API-Key': document.getElementById('api-key').value || ''
+            };
+        }
+
+        function showMsg(type, text) {
+            const el = document.getElementById('form-msg');
+            el.className = 'msg ' + type;
+            el.textContent = text;
+            setTimeout(() => el.className = 'msg', 3000);
+        }
+
+        async function loadSettings() {
+            try {
+                const res = await fetch(`${API_BASE}/settings`, { headers: headers() });
+                if (res.ok) {
+                    const data = await res.json();
+                    data.forEach(s => {
+                        const el = document.getElementById(s.key);
+                        if (el) el.value = s.value;
+                    });
+                }
+            } catch (e) { console.error("Konnte Settings nicht laden", e); }
+        }
+
+        async function saveSettings() {
+            const keys = ['ha_url', 'ha_service', 'ha_token'];
+            let hasError = false;
+
+            for (const key of keys) {
+                const val = document.getElementById(key).value;
+                try {
+                    const res = await fetch(`${API_BASE}/settings`, {
+                        method: 'POST',
+                        headers: headers(),
+                        body: JSON.stringify({ key: key, value: val })
+                    });
+                    if (!res.ok) hasError = true;
+                } catch (e) {
+                    hasError = true;
+                }
+            }
+
+            if (hasError) {
+                showMsg('error', '✗ Fehler beim Speichern (API Key prüfen!)');
+            } else {
+                showMsg('success', '✓ Einstellungen erfolgreich gespeichert');
+            }
+        }
+    </script>
+</body>
+
+</html>

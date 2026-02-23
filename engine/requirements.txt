@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+onnxruntime
+fast-alpr
+python-multipart
+opencv-python-headless
