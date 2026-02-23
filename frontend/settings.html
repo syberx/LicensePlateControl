@@ -140,6 +140,60 @@
             margin-bottom: 1.25rem;
         }
 
+        .toggle-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 28px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.15);
+            transition: .3s;
+            border-radius: 28px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked+.slider {
+            background-color: #34d399;
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(22px);
+        }
+
         .form-label {
             font-size: 0.75rem;
             color: rgba(255, 255, 255, 0.5);
@@ -247,9 +301,16 @@
         <h1 class="section-title">Einstellungen & Integrationen</h1>
 
         <div class="settings-card">
-            <h3>Home Assistant Integration</h3>
-            <p class="desc">Konfiguriere den Webhook oder API-Aufruf zu Home Assistant. Dieser wird ausgeführt, wenn ein
-                autorisiertes Kennzeichen erkannt wird.</p>
+            <div class="toggle-wrap">
+                <div>
+                    <h3>Home Assistant Integration</h3>
+                    <p class="desc" style="margin-bottom: 0;">Führt bei Erkennung einen HA Call aus.</p>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="ha_enabled" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
 
             <form id="ha-form" onsubmit="return false;">
                 <div class="form-group">
@@ -265,11 +326,49 @@
                     <input type="password" id="ha_token" class="form-input"
                         placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
                 </div>
-
-                <button class="btn btn-primary" onclick="saveSettings()">Speichern</button>
-                <div class="msg" id="form-msg"></div>
             </form>
         </div>
+
+        <div class="settings-card">
+            <div class="toggle-wrap">
+                <div>
+                    <h3>MQTT Integration</h3>
+                    <p class="desc" style="margin-bottom: 0;">Sendet bei Erkennung ein JSON Payload an einen MQTT
+                        Broker.</p>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="mqtt_enabled">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <form id="mqtt-form" onsubmit="return false;">
+                <div class="form-group">
+                    <label class="form-label">MQTT Broker (IP/Hostname)</label>
+                    <input type="text" id="mqtt_broker" class="form-input" placeholder="192.168.1.10">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Port</label>
+                    <input type="number" id="mqtt_port" class="form-input" placeholder="1883" value="1883">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Topic</label>
+                    <input type="text" id="mqtt_topic" class="form-input" placeholder="lpc/plate_detected"
+                        value="lpc/plate_detected">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Benutzername (Optional)</label>
+                    <input type="text" id="mqtt_user" class="form-input" placeholder="mqttuser">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Passwort (Optional)</label>
+                    <input type="password" id="mqtt_pass" class="form-input" placeholder="••••••••">
+                </div>
+            </form>
+        </div>
+
+        <button class="btn btn-primary" onclick="saveSettings()">Alle Einstellungen Speichern</button>
+        <div class="msg" id="form-msg"></div>
 
     </div>
 
@@ -303,18 +402,25 @@
                     const data = await res.json();
                     data.forEach(s => {
                         const el = document.getElementById(s.key);
-                        if (el) el.value = s.value;
+                        if (el) {
+                            if (el.type === 'checkbox') {
+                                el.checked = (s.value === 'true');
+                            } else {
+                                el.value = s.value;
+                            }
+                        }
                     });
                 }
             } catch (e) { console.error("Konnte Settings nicht laden", e); }
         }
 
         async function saveSettings() {
-            const keys = ['ha_url', 'ha_service', 'ha_token'];
+            const keys = ['ha_enabled', 'ha_url', 'ha_service', 'ha_token', 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass'];
             let hasError = false;
 
             for (const key of keys) {
-                const val = document.getElementById(key).value;
+                const el = document.getElementById(key);
+                const val = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
                 try {
                     const res = await fetch(`${API_BASE}/settings`, {
                         method: 'POST',

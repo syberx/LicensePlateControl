@@ -64,6 +64,7 @@ class EventResponse(BaseModel):
     matched_plate_description: Optional[str] = None
     match_score: Optional[float] = None
     ha_triggered: Optional[bool] = False
+    mqtt_triggered: Optional[bool] = False
     processing_time_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 sqlalchemy
+pydantic
 watchdog
 requests
 psycopg2-binary
+paho-mqtt

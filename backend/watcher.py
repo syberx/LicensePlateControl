@@ -10,6 +10,8 @@ from watchdog.events import FileSystemEventHandler
 from database import SessionLocal
 import models
 import logging
+import json
+import paho.mqtt.client as mqtt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -105,18 +107,20 @@ def fuzzy_match_plate(detected_plate: str, threshold: float = 0.80) -> tuple:
 
 # --- Motion Burst State ---
 
-active_series = {}  # folder_path -> {series_id, event_id, last_activity, ha_triggered, best_plate, ...}
-series_lock = threading.Lock()
-SERIES_TIMEOUT = 30  # seconds — group images within this window
+SERIES_TIMEOUT = 30  # Wait up to 30s of silence before closing a series
 
+HA_COOLDOWN = 60  # Only trigger Home Assistant once per minute per plate
+MQTT_COOLDOWN = 60 # Only trigger MQTT once per minute per plate
+
+active_series = {}  # {folder_path: {"series_id": sid, "event_id": eid, "last_activity": timestamp, "best_plate": plate, ...}}
+series_lock = threading.Lock()
 processed_files = set()
 followup_timers = {}
 timers_lock = threading.Lock()
 
-HA_COOLDOWN = 60  # seconds — minimum gap between HA triggers for the same plate
-
-# Track last HA trigger per plate for cooldown
 last_ha_trigger = {}  # {plate_text: timestamp}
+last_mqtt_trigger = {} # {plate_text: timestamp}
+
 
 def process_single_image(img_path: str) -> dict:
     """Send a single image to the engine and return the best plate result."""
@@ -186,6 +190,46 @@ def trigger_ha(plate_text: str) -> bool:
         logger.error(f"Home Assistant trigger failed: {e}")
         return False
 
+def trigger_mqtt(plate_text: str) -> bool:
+    """Publish detected plate to MQTT broker, with cooldown."""
+    now = time.time()
+    if plate_text in last_mqtt_trigger:
+        elapsed = now - last_mqtt_trigger[plate_text]
+        if elapsed < MQTT_COOLDOWN:
+            logger.info(f"MQTT trigger skipped for '{plate_text}' — cooldown ({MQTT_COOLDOWN - elapsed:.0f}s remaining)")
+            return False
+            
+    db = SessionLocal()
+    try:
+        broker = get_setting(db, "mqtt_broker", "")
+        port = int(get_setting(db, "mqtt_port", "1883"))
+        user = get_setting(db, "mqtt_user", "")
+        password = get_setting(db, "mqtt_pass", "")
+        topic = get_setting(db, "mqtt_topic", "licenseplatecontrol/plate_detected")
+    finally:
+        db.close()
+        
+    if not broker:
+        logger.info("MQTT trigger skipped — no broker configured")
+        return False
+        
+    try:
+        logger.info(f"Publishing MQTT for plate '{plate_text}'...")
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        if user:
+            client.username_pw_set(user, password)
+        client.connect(broker, port, 5)
+        from datetime import datetime # Import datetime here to avoid circular dependency if it's not already imported globally
+        payload = json.dumps({"plate": plate_text, "timestamp": datetime.utcnow().isoformat()})
+        client.publish(topic, payload)
+        client.disconnect()
+        logger.info(f"MQTT published to topic {topic}")
+        last_mqtt_trigger[plate_text] = now
+        return True
+    except Exception as e:
+        logger.error(f"MQTT trigger failed: {e}")
+        return False
+
 def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger: bool = False):
     """Read image file, store in DB as EventImage, then delete the file."""
     try:
@@ -233,10 +277,19 @@ def process_first_image(folder_path: str, img_path: str):
     # Fuzzy match against DB
     matched_plate, match_score, decision = fuzzy_match_plate(plate)
     
-    # Trigger HA if allowed
+    # Trigger integrations if allowed
+    db = SessionLocal()
+    ha_enabled = get_setting(db, "ha_enabled", "true").lower() == "true"
+    mqtt_enabled = get_setting(db, "mqtt_enabled", "false").lower() == "true"
+    db.close()
+    
     ha_triggered = False
+    mqtt_triggered = False
     if decision == "allowed":
-        ha_triggered = trigger_ha(matched_plate or plate)
+        if ha_enabled:
+            ha_triggered = trigger_ha(matched_plate or plate)
+        if mqtt_enabled:
+            mqtt_triggered = trigger_mqtt(matched_plate or plate)
     
     # Create event in DB
     sid = str(uuid.uuid4())[:8]
@@ -252,6 +305,7 @@ def process_first_image(folder_path: str, img_path: str):
             matched_plate=matched_plate,
             match_score=match_score,
             ha_triggered=ha_triggered,
+            mqtt_triggered=mqtt_triggered,
             processing_time_ms=result.get("processing_time_ms")
         )
         db.add(new_event)
@@ -283,6 +337,7 @@ def process_first_image(folder_path: str, img_path: str):
             "matched_plate": matched_plate,
             "match_score": match_score,
             "decision": decision,
+            "mqtt_triggered": mqtt_triggered,
         }
 
 def process_followup_images(folder_path: str):
@@ -336,10 +391,19 @@ def process_followup_images(folder_path: str):
     # Re-check fuzzy match with the improved plate
     matched_plate, match_score, decision = fuzzy_match_plate(best_plate)
     
-    # If decision improved to allowed and HA wasn't triggered yet, trigger now
+    db = SessionLocal()
+    ha_enabled = get_setting(db, "ha_enabled", "true").lower() == "true"
+    mqtt_enabled = get_setting(db, "mqtt_enabled", "false").lower() == "true"
+    db.close()
+    
+    # If decision improved to allowed and triggers weren't fired yet, trigger now
     ha_triggered = series["ha_triggered"]
-    if decision == "allowed" and not ha_triggered:
-        ha_triggered = trigger_ha(matched_plate or best_plate)
+    mqtt_triggered = series.get("mqtt_triggered", False)
+    if decision == "allowed":
+        if ha_enabled and not ha_triggered:
+            ha_triggered = trigger_ha(matched_plate or best_plate)
+        if mqtt_enabled and not mqtt_triggered:
+            mqtt_triggered = trigger_mqtt(matched_plate or best_plate)
     
     # Update event in DB and store images
     db = SessionLocal()
@@ -352,6 +416,7 @@ def process_followup_images(folder_path: str):
             event.matched_plate = matched_plate
             event.match_score = match_score
             event.ha_triggered = ha_triggered
+            event.mqtt_triggered = mqtt_triggered
             
             if image_results and image_results[-1][1].get("processing_time_ms"):
                 event.processing_time_ms = image_results[-1][1].get("processing_time_ms")
@@ -380,6 +445,7 @@ def process_followup_images(folder_path: str):
                 "best_plate": best_plate,
                 "best_confidence": best_conf,
                 "ha_triggered": ha_triggered,
+                "mqtt_triggered": mqtt_triggered,
                 "matched_plate": matched_plate,
                 "match_score": match_score,
                 "decision": decision,
@@ -502,9 +568,19 @@ def process_startup_series(folder_path: str, imgs: list):
     
     # Determine decision
     matched_plate, match_score, decision = fuzzy_match_plate(best_plate)
+    
+    db = SessionLocal()
+    ha_enabled = get_setting(db, "ha_enabled", "true").lower() == "true"
+    mqtt_enabled = get_setting(db, "mqtt_enabled", "false").lower() == "true"
+    db.close()
+    
     ha_triggered = False
+    mqtt_triggered = False
     if decision == "allowed":
-        ha_triggered = trigger_ha(matched_plate or best_plate)
+        if ha_enabled:
+            ha_triggered = trigger_ha(matched_plate or best_plate)
+        if mqtt_enabled:
+            mqtt_triggered = trigger_mqtt(matched_plate or best_plate)
     
     # Create event and store all images
     sid = str(uuid.uuid4())[:8]
@@ -520,6 +596,7 @@ def process_startup_series(folder_path: str, imgs: list):
             matched_plate=matched_plate,
             match_score=match_score,
             ha_triggered=ha_triggered,
+            mqtt_triggered=mqtt_triggered,
             processing_time_ms=last_result.get("processing_time_ms")
         )
         db.add(new_event)
