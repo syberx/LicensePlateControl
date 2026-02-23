@@ -22,6 +22,10 @@
             min-height: 100vh;
         }
 
+        [x-cloak] {
+            display: none !important;
+        }
+
         .nav {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(20px);
@@ -279,8 +283,67 @@
             .container {
                 padding: 1rem;
             }
+
+            .settings-layout {
+                flex-direction: column !important;
+            }
+
+            .settings-sidebar {
+                width: 100% !important;
+                flex-direction: row !important;
+                overflow-x: auto;
+                padding-bottom: 0.5rem;
+            }
+
+            .sidebar-link {
+                white-space: nowrap;
+            }
+        }
+
+        .settings-layout {
+            display: flex;
+            gap: 2rem;
+            align-items: flex-start;
+        }
+
+        .settings-sidebar {
+            width: 240px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .sidebar-link {
+            padding: 0.75rem 1rem;
+            border-radius: 10px;
+            color: rgba(255, 255, 255, 0.6);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid transparent;
+            display: block;
+        }
+
+        .sidebar-link:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+        }
+
+        .sidebar-link.active {
+            background: rgba(129, 140, 248, 0.15);
+            color: #818cf8;
+            border-color: rgba(129, 140, 248, 0.3);
+        }
+
+        .settings-content {
+            flex-grow: 1;
+            min-width: 0;
         }
     </style>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
 </head>
 
 <body>
@@ -297,79 +360,96 @@
         </div>
     </nav>
 
-    <div class="container">
+    <div class="container" x-data="{ tab: 'ha' }">
         <h1 class="section-title">Einstellungen & Integrationen</h1>
 
-        <div class="settings-card">
-            <div class="toggle-wrap">
-                <div>
-                    <h3>Home Assistant Integration</h3>
-                    <p class="desc" style="margin-bottom: 0;">Führt bei Erkennung einen HA Call aus.</p>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="ha_enabled" checked>
-                    <span class="slider"></span>
-                </label>
+        <div class="settings-layout">
+            <div class="settings-sidebar">
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'ha'}" @click.prevent="tab = 'ha'">Home
+                    Assistant</a>
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'mqtt'}" @click.prevent="tab = 'mqtt'">MQTT
+                    Broker</a>
             </div>
 
-            <form id="ha-form" onsubmit="return false;">
-                <div class="form-group">
-                    <label class="form-label">Home Assistant URL</label>
-                    <input type="url" id="ha_url" class="form-input" placeholder="http://192.168.1.100:8123">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Dienst-Pfad (Service / Webhook)</label>
-                    <input type="text" id="ha_service" class="form-input" placeholder="/api/services/cover/open_cover">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Long-Lived Access Token (Bearer)</label>
-                    <input type="password" id="ha_token" class="form-input"
-                        placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
-                </div>
-            </form>
-        </div>
+            <div class="settings-content">
+                <div x-show="tab === 'ha'" x-cloak>
+                    <div class="settings-card">
+                        <div class="toggle-wrap">
+                            <div>
+                                <h3>Home Assistant Integration</h3>
+                                <p class="desc" style="margin-bottom: 0;">Führt bei Erkennung einen HA Call aus.</p>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="ha_enabled" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
 
-        <div class="settings-card">
-            <div class="toggle-wrap">
-                <div>
-                    <h3>MQTT Integration</h3>
-                    <p class="desc" style="margin-bottom: 0;">Sendet bei Erkennung ein JSON Payload an einen MQTT
-                        Broker.</p>
+                        <form id="ha-form" onsubmit="return false;">
+                            <div class="form-group">
+                                <label class="form-label">Home Assistant URL</label>
+                                <input type="url" id="ha_url" class="form-input"
+                                    placeholder="http://192.168.1.100:8123">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Dienst-Pfad (Service / Webhook)</label>
+                                <input type="text" id="ha_service" class="form-input"
+                                    placeholder="/api/services/cover/open_cover">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Long-Lived Access Token (Bearer)</label>
+                                <input type="password" id="ha_token" class="form-input"
+                                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+                            </div>
+                        </form>
+                    </div>
                 </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="mqtt_enabled">
-                    <span class="slider"></span>
-                </label>
+
+                <div x-show="tab === 'mqtt'" x-cloak>
+                    <div class="settings-card">
+                        <div class="toggle-wrap">
+                            <div>
+                                <h3>MQTT Integration</h3>
+                                <p class="desc" style="margin-bottom: 0;">Sendet bei Erkennung ein JSON Payload an einen
+                                    MQTT
+                                    Broker.</p>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="mqtt_enabled">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <form id="mqtt-form" onsubmit="return false;">
+                            <div class="form-group">
+                                <label class="form-label">MQTT Broker (IP/Hostname)</label>
+                                <input type="text" id="mqtt_broker" class="form-input" placeholder="192.168.1.10">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Port</label>
+                                <input type="number" id="mqtt_port" class="form-input" placeholder="1883" value="1883">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Topic</label>
+                                <input type="text" id="mqtt_topic" class="form-input" placeholder="lpc/plate_detected"
+                                    value="lpc/plate_detected">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Benutzername (Optional)</label>
+                                <input type="text" id="mqtt_user" class="form-input" placeholder="mqttuser">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Passwort (Optional)</label>
+                                <input type="password" id="mqtt_pass" class="form-input" placeholder="••••••••">
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" onclick="saveSettings()">Alle Einstellungen Speichern</button>
+                <div class="msg" id="form-msg"></div>
             </div>
-
-            <form id="mqtt-form" onsubmit="return false;">
-                <div class="form-group">
-                    <label class="form-label">MQTT Broker (IP/Hostname)</label>
-                    <input type="text" id="mqtt_broker" class="form-input" placeholder="192.168.1.10">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Port</label>
-                    <input type="number" id="mqtt_port" class="form-input" placeholder="1883" value="1883">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Topic</label>
-                    <input type="text" id="mqtt_topic" class="form-input" placeholder="lpc/plate_detected"
-                        value="lpc/plate_detected">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Benutzername (Optional)</label>
-                    <input type="text" id="mqtt_user" class="form-input" placeholder="mqttuser">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Passwort (Optional)</label>
-                    <input type="password" id="mqtt_pass" class="form-input" placeholder="••••••••">
-                </div>
-            </form>
         </div>
-
-        <button class="btn btn-primary" onclick="saveSettings()">Alle Einstellungen Speichern</button>
-        <div class="msg" id="form-msg"></div>
-
     </div>
 
     <script>
