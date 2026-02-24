@@ -532,13 +532,62 @@
                                 <span style="font-weight: 600; font-size: 0.85rem;"
                                     x-text="status.state === 'connected' ? '● Verbunden' : status.state === 'connecting' ? '◌ Verbindet...' : status.state === 'error' ? '✗ Fehler' : '○ Deaktiviert'"></span>
                             </div>
-                            <p style="font-size: 0.8rem; color: rgba(255,255,255,0.6); margin-bottom: 0.5rem;"
+                            <p style="font-size: 0.8rem; color: rgba(255,255,255,0.6); margin-bottom: 0.75rem;"
                                 x-text="status.message"></p>
-                            <div style="display: flex; gap: 1.5rem; font-size: 0.75rem; color: rgba(255,255,255,0.4);">
-                                <span>📸 <span x-text="status.frames_captured"></span> Frames</span>
-                                <span>⚡ <span x-text="status.fps"></span> FPS</span>
-                                <span x-show="status.last_capture">🕒 <span
-                                        x-text="formatTime(status.last_capture)"></span></span>
+
+                            <!-- Preview Image -->
+                            <div x-show="status.state === 'connected'" style="margin-bottom: 0.75rem;">
+                                <img :src="'/api/rtsp/preview?' + Date.now()"
+                                    style="width:100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); max-height: 220px; object-fit: cover;"
+                                    alt="RTSP Preview" onerror="this.style.display='none'"
+                                    onload="this.style.display='block'">
+                            </div>
+
+                            <!-- Stats Grid -->
+                            <div
+                                style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.75rem;">
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Analysiert</div>
+                                    <div style="color: #e0e0e0; font-weight: 600;"><span
+                                            x-text="status.frames_analyzed || 0"></span> Frames</div>
+                                </div>
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Erkennungen
+                                    </div>
+                                    <div style="color: #34d399; font-weight: 600;">🚗 <span
+                                            x-text="status.detections || 0"></span></div>
+                                </div>
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Engine-Zeit
+                                    </div>
+                                    <div style="color: #e0e0e0; font-weight: 600;"><span
+                                            x-text="status.last_processing_ms ? status.last_processing_ms + ' ms' : '—'"></span>
+                                    </div>
+                                </div>
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Analyse-Rate
+                                    </div>
+                                    <div style="color: #e0e0e0; font-weight: 600;">⚡ <span
+                                            x-text="status.fps || 0"></span> /s</div>
+                                </div>
+                            </div>
+
+                            <!-- Last Detection -->
+                            <div x-show="status.last_plate"
+                                style="margin-top: 0.75rem; padding: 0.6rem 0.75rem; background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.2); border-radius: 8px;">
+                                <div style="font-size: 0.7rem; color: rgba(52,211,153,0.7); margin-bottom: 0.15rem;">
+                                    Letztes erkanntes Kennzeichen</div>
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <span
+                                        style="font-size: 1rem; font-weight: 700; color: #34d399; letter-spacing: 1.5px;"
+                                        x-text="status.last_plate"></span>
+                                    <span style="font-size: 0.75rem; color: rgba(255,255,255,0.5);"
+                                        x-text="status.last_confidence ? (status.last_confidence * 100).toFixed(0) + '%' : ''"></span>
+                                </div>
                             </div>
                         </div>
                     </div>

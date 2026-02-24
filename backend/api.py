@@ -210,6 +210,14 @@ def update_setting(setting: SettingCreate, db: Session = Depends(get_db), api_ke
 
 @router.get("/api/rtsp/status")
 def get_rtsp_status():
-    """Return current RTSP grabber status (state, frames, fps, etc.)."""
+    """Return current RTSP grabber status (state, frames, detections, etc.)."""
     from watcher import rtsp_status
     return rtsp_status
+
+@router.get("/api/rtsp/preview")
+def get_rtsp_preview():
+    """Serve the latest RTSP frame as a JPEG image for the live preview."""
+    from watcher import rtsp_preview_frame
+    if rtsp_preview_frame is None:
+        raise HTTPException(status_code=404, detail="No preview available")
+    return Response(content=rtsp_preview_frame, media_type="image/jpeg")

@@ -512,14 +512,18 @@ def check_storage_cleanup():
         time.sleep(3600)  # Check once an hour
 
 
-# --- RTSP Grabber with Status Tracking ---
+# --- RTSP Grabber with Smart Analysis ---
 
 rtsp_status = {
-    "state": "disabled",       # disabled | connecting | connected | error | stopped
+    "state": "disabled",           # disabled | connecting | connected | error
     "message": "RTSP nicht aktiviert",
-    "frames_captured": 0,
-    "frames_analyzed": 0,
-    "last_capture": None,
+    "frames_grabbed": 0,           # Total frames read from stream
+    "frames_analyzed": 0,          # Frames sent to engine
+    "detections": 0,               # Frames where a real plate was found
+    "last_capture": None,          # ISO timestamp of last analysis
+    "last_plate": None,            # Last detected plate text
+    "last_confidence": None,       # Last detection confidence
+    "last_processing_ms": None,    # Last engine processing time (ms)
     "fps": 0.0,
     "url": "",
     "camera_name": "",
@@ -527,142 +531,224 @@ rtsp_status = {
     "interval_value": 3,
 }
 
+# Latest RTSP preview frame (JPEG bytes) — served via API
+rtsp_preview_frame = None
+
+
+def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
+    """Send JPEG bytes to the engine API and return the best plate result."""
+    try:
+        files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
+        response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+            processing_time_ms = data.get("processing_time_ms")
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms}
+            for res in results:
+                plate_text = apply_corrections(res.get("plate", ""))
+                conf = float(res.get("confidence", 0.0))
+                if conf > best["confidence"]:
+                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms}
+            return best
+        else:
+            logger.error(f"Engine API error {response.status_code} for RTSP frame")
+    except Exception as e:
+        logger.error(f"RTSP engine analysis error: {e}")
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+
+
 def rtsp_grabber():
-    """Background thread: grab frames from an RTSP stream at configurable intervals."""
-    global rtsp_status
+    """Background thread: grab frames from RTSP, analyze via engine, only store real detections."""
+    global rtsp_status, rtsp_preview_frame
     import cv2
-    
+
     cap = None
     current_url = None
     consecutive_fails = 0
     MAX_FAILS_BEFORE_RECONNECT = 5
-    frame_counter = 0  # Total frames read from stream (for frame-skip mode)
-    capture_times = []  # For FPS calculation
-    
+    frame_counter = 0
+    capture_times = []
+
     while True:
         try:
             db = SessionLocal()
             enabled = get_setting(db, "rtsp_enabled", "false").lower() == "true"
             rtsp_url = get_setting(db, "rtsp_url", "")
             interval_value = int(get_setting(db, "rtsp_interval", "3"))
-            interval_mode = get_setting(db, "rtsp_interval_mode", "seconds")  # "seconds" or "frames"
+            interval_mode = get_setting(db, "rtsp_interval_mode", "seconds")
             camera_name = get_setting(db, "rtsp_camera_name", "cam1")
             db.close()
-            
+
             rtsp_status["interval_mode"] = interval_mode
             rtsp_status["interval_value"] = interval_value
             rtsp_status["camera_name"] = camera_name
-            
+
             if not enabled or not rtsp_url:
                 if cap is not None:
                     cap.release()
                     cap = None
                     current_url = None
-                    logger.info("📹 RTSP Grabber: Disabled or no URL. Sleeping...")
+                    logger.info("📹 RTSP: Deaktiviert.")
                 rtsp_status["state"] = "disabled" if not enabled else "error"
-                rtsp_status["message"] = "RTSP nicht aktiviert" if not enabled else "Keine Stream-URL konfiguriert"
+                rtsp_status["message"] = "RTSP nicht aktiviert" if not enabled else "Keine Stream-URL"
                 rtsp_status["url"] = ""
                 time.sleep(10)
                 continue
-            
+
             rtsp_status["url"] = rtsp_url
-            
+
             # (Re)connect if URL changed or no connection
             if cap is None or current_url != rtsp_url:
                 if cap is not None:
                     cap.release()
                 rtsp_status["state"] = "connecting"
-                rtsp_status["message"] = f"Verbinde mit {rtsp_url} ..."
-                logger.info(f"📹 RTSP Grabber: Connecting to {rtsp_url} ...")
-                
+                rtsp_status["message"] = "Verbinde..."
+                logger.info(f"📹 RTSP: Connecting to {rtsp_url}")
+
                 cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                
+
                 if cap.isOpened():
                     current_url = rtsp_url
                     consecutive_fails = 0
                     frame_counter = 0
-                    mode_label = f"alle {interval_value}s" if interval_mode == "seconds" else f"jeder {interval_value}. Frame"
                     rtsp_status["state"] = "connected"
-                    rtsp_status["message"] = f"Verbunden — Modus: {mode_label}"
-                    logger.info(f"📹 RTSP Grabber: Connected! Mode: {interval_mode}, Value: {interval_value}, Camera: {camera_name}")
+                    rtsp_status["message"] = "Verbunden — warte auf Frames..."
+                    logger.info(f"📹 RTSP: Connected! Mode={interval_mode}, Val={interval_value}")
                 else:
                     rtsp_status["state"] = "error"
-                    rtsp_status["message"] = f"Verbindung fehlgeschlagen. Neuer Versuch in 15s..."
-                    logger.warning(f"📹 RTSP Grabber: Failed to connect to {rtsp_url}. Retrying in 15s...")
+                    rtsp_status["message"] = "Verbindung fehlgeschlagen (15s Retry)"
+                    logger.warning(f"📹 RTSP: Connection failed to {rtsp_url}")
                     cap.release()
                     cap = None
                     time.sleep(15)
                     continue
-            
+
             # Grab a frame
             ret, frame = cap.read()
             if not ret or frame is None:
                 consecutive_fails += 1
                 rtsp_status["message"] = f"Frame-Fehler ({consecutive_fails}/{MAX_FAILS_BEFORE_RECONNECT})"
-                logger.warning(f"📹 RTSP Grabber: Frame capture failed ({consecutive_fails}/{MAX_FAILS_BEFORE_RECONNECT})")
                 if consecutive_fails >= MAX_FAILS_BEFORE_RECONNECT:
                     rtsp_status["state"] = "error"
-                    rtsp_status["message"] = "Stream abgebrochen. Reconnecting..."
-                    logger.warning("📹 RTSP Grabber: Too many failures. Reconnecting...")
+                    rtsp_status["message"] = "Stream abgebrochen — Reconnecting..."
                     cap.release()
                     cap = None
                     current_url = None
                     consecutive_fails = 0
                     time.sleep(5)
                 continue
-            
+
             consecutive_fails = 0
             frame_counter += 1
-            
+            rtsp_status["frames_grabbed"] = frame_counter
+
             # --- Interval Logic ---
-            should_analyze = False
             if interval_mode == "frames":
-                # Analyze every Nth frame
-                if frame_counter % max(interval_value, 1) == 0:
-                    should_analyze = True
-                else:
-                    # Skip this frame — just grab to keep the stream flowing
-                    continue
-            else:
-                # "seconds" mode: we already sleep at the bottom
-                should_analyze = True
-            
-            if should_analyze:
-                # Write frame as JPEG into /events/{camera_name}/
-                cam_folder = os.path.join(EVENTS_DIR, camera_name)
-                os.makedirs(cam_folder, exist_ok=True)
-                
-                ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                frame_filename = f"rtsp_{camera_name}.{ts}.jpg"
-                frame_path = os.path.join(cam_folder, frame_filename)
-                
-                cv2.imwrite(frame_path, frame)
-                
-                rtsp_status["frames_captured"] += 1
-                rtsp_status["last_capture"] = datetime.utcnow().isoformat()
-                
-                # Calculate FPS (captures per minute for readability)
-                now = time.time()
-                capture_times.append(now)
-                # Keep only last 60 seconds of captures
-                capture_times[:] = [t for t in capture_times if now - t < 60]
-                if len(capture_times) > 1:
-                    elapsed = capture_times[-1] - capture_times[0]
-                    rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
-                
+                if frame_counter % max(interval_value, 1) != 0:
+                    continue  # Skip this frame
+            # else: seconds mode — we sleep at the bottom
+
+            # --- Encode frame to JPEG in memory ---
+            success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not success:
+                continue
+            jpeg_bytes = jpeg_buf.tobytes()
+
+            # Store as preview for the status API
+            rtsp_preview_frame = jpeg_bytes
+
+            rtsp_status["frames_analyzed"] += 1
+            rtsp_status["last_capture"] = datetime.utcnow().isoformat()
+
+            # Calculate analysis rate
+            now = time.time()
+            capture_times.append(now)
+            capture_times[:] = [t for t in capture_times if now - t < 60]
+            if len(capture_times) > 1:
+                elapsed = capture_times[-1] - capture_times[0]
+                rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
+
+            # --- Send to Engine API for analysis ---
+            result = _analyze_frame_bytes(jpeg_bytes, f"rtsp_{camera_name}.jpg")
+
+            plate = result.get("plate", "")
+            confidence = result.get("confidence", 0.0)
+            proc_ms = result.get("processing_time_ms")
+
+            rtsp_status["last_processing_ms"] = round(proc_ms, 1) if proc_ms else None
+
+            is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
+
+            if is_real_plate:
+                # ✅ Real plate detected — create event in DB
+                rtsp_status["detections"] += 1
+                rtsp_status["last_plate"] = plate
+                rtsp_status["last_confidence"] = round(confidence, 2)
+
                 mode_label = f"alle {interval_value}s" if interval_mode == "seconds" else f"jeder {interval_value}. Frame"
                 rtsp_status["state"] = "connected"
-                rtsp_status["message"] = f"Aktiv — {rtsp_status['frames_captured']} Frames — {mode_label}"
-                
-                logger.info(f"📹 RTSP Grabber: Captured frame #{rtsp_status['frames_captured']} → {frame_filename}")
-            
+                rtsp_status["message"] = f"🚗 {plate} ({confidence:.0%}) — {rtsp_status['detections']} Erkennungen — {mode_label}"
+                logger.info(f"📹 RTSP: Plate detected: {plate} ({confidence:.0%}) — creating event")
+
+                # Fuzzy match & create event
+                matched_plate, match_score, decision = fuzzy_match_plate(plate)
+                db = SessionLocal()
+                try:
+                    event = models.Event(
+                        timestamp=datetime.utcnow(),
+                        detected_plate=plate,
+                        confidence=f"{confidence:.4f}",
+                        decision=decision,
+                        series_id=f"rtsp_{camera_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                        image_count=1,
+                        matched_plate=matched_plate,
+                        match_score=match_score,
+                        processing_time_ms=proc_ms
+                    )
+                    db.add(event)
+                    db.flush()
+
+                    # Store the image
+                    event_image = models.EventImage(
+                        event_id=event.id,
+                        filename=f"rtsp_{camera_name}_{datetime.utcnow().strftime('%H%M%S')}.jpg",
+                        image_data=jpeg_bytes,
+                        detected_plate=plate,
+                        confidence=confidence,
+                        has_plate=True,
+                        is_trigger=True
+                    )
+                    db.add(event_image)
+                    db.commit()
+
+                    logger.info(f"📹 RTSP: Event #{event.id} created for {plate}")
+
+                    # Trigger HA / MQTT if allowed
+                    if decision == "ALLOWED":
+                        trigger_ha(plate)
+                        trigger_mqtt(plate)
+
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"📹 RTSP: DB error: {e}")
+                finally:
+                    db.close()
+
+            else:
+                # ❌ No plate / UNKNOWN — just update status, no DB write
+                mode_label = f"alle {interval_value}s" if interval_mode == "seconds" else f"jeder {interval_value}. Frame"
+                rtsp_status["state"] = "connected"
+                last_det = f" | Letzte: {rtsp_status['last_plate']}" if rtsp_status['last_plate'] else ""
+                rtsp_status["message"] = f"Aktiv — kein Kennzeichen{last_det} — {mode_label}"
+
             # Sleep only in seconds mode
             if interval_mode == "seconds":
                 time.sleep(interval_value)
-            
+
         except Exception as e:
-            logger.error(f"📹 RTSP Grabber error: {e}")
+            logger.error(f"📹 RTSP error: {e}")
             rtsp_status["state"] = "error"
             rtsp_status["message"] = f"Fehler: {str(e)[:80]}"
             if cap is not None:
