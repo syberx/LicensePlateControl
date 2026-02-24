@@ -115,6 +115,15 @@ def update_plate_active(plate_id: int, update: ActiveUpdate, db: Session = Depen
     db.refresh(db_plate)
     return db_plate
 
+@router.delete("/api/plates/{plate_id}")
+def delete_plate(plate_id: int, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
+    db_plate = db.query(models.Plate).filter(models.Plate.id == plate_id).first()
+    if not db_plate:
+        raise HTTPException(status_code=404, detail="Plate not found")
+    db.delete(db_plate)
+    db.commit()
+    return {"status": "ok", "message": "Kennzeichen gelöscht"}
+
 @router.post("/api/external/plates", response_model=PlateResponse)
 def external_push_plate(plate: PlateCreate, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
     db_plate = db.query(models.Plate).filter(models.Plate.plate_text == plate.plate_text).first()
@@ -159,6 +168,19 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
         if plate:
             er.matched_plate_description = plate.description
     return er
+
+@router.delete("/api/events")
+def clear_all_events(db: Session = Depends(get_db)):
+    """Delete all events and associated images from the database."""
+    try:
+        # Cascade delete is configured on the model, but let's be safe
+        db.query(models.EventImage).delete()
+        db.query(models.Event).delete()
+        db.commit()
+        return {"status": "ok", "message": "Alle Events und Bilder gelöscht"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/api/events/{event_id}/images", response_model=List[EventImageResponse])
 def get_event_images(event_id: int, db: Session = Depends(get_db)):

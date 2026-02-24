@@ -569,11 +569,12 @@ rtsp_status = {
     "frames_grabbed": 0,           # Total frames read from stream
     "frames_analyzed": 0,          # Frames sent to engine
     "detections": 0,               # Frames where a real plate was found
-    "frames_skipped": 0,           # Frames skipped (frame mode)
+    "frames_skipped": 0,           # Frames skipped (frame mode or buffer drain)
     "last_capture": None,          # ISO timestamp of last analysis
     "last_plate": None,            # Last detected plate text
     "last_confidence": None,       # Last detection confidence
     "last_processing_ms": None,    # Last engine processing time (ms)
+    "last_analysis_timestamp": 0.0,# Unix time of last analysis (used for seconds mode buffer drain)
     "fps": 0.0,
     "url": "",
     "camera_name": "",
@@ -584,6 +585,9 @@ rtsp_status = {
 
 # Latest RTSP preview frame (JPEG bytes) — served via API
 rtsp_preview_frame = None
+
+# Tracks last-seen timestamp per plate to prevent spam events (e.g., parked cars)
+rtsp_cooldown = {}
 
 # --- Debug Frame Buffer (1-hour rolling storage) ---
 # Stores ALL analyzed frames with metadata for forensic debugging.
@@ -633,17 +637,17 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
 
 
-def rtsp_grabber():
-    """Background thread: grab frames from RTSP, analyze via engine, only store real detections."""
-    global rtsp_status, rtsp_preview_frame
-    import cv2
+rtsp_latest_frame_data = None
+rtsp_frame_lock = threading.Lock()
 
+def rtsp_reader_thread():
+    """Producer Thread: Reads frames from RTSP as fast as possible to prevent FFMPEG buffering lag."""
+    global rtsp_status, rtsp_latest_frame_data
+    import cv2
     cap = None
     current_url = None
     consecutive_fails = 0
-    MAX_FAILS_BEFORE_RECONNECT = 15  # Tolerant: RTSP drops occasional frames
-    frame_counter = 0
-    capture_times = []
+    MAX_FAILS_BEFORE_RECONNECT = 15
 
     while True:
         try:
@@ -668,12 +672,14 @@ def rtsp_grabber():
                 rtsp_status["state"] = "disabled" if not enabled else "error"
                 rtsp_status["message"] = "RTSP nicht aktiviert" if not enabled else "Keine Stream-URL"
                 rtsp_status["url"] = ""
-                time.sleep(10)
+                with rtsp_frame_lock:
+                    rtsp_latest_frame_data = None
+                time.sleep(5)
                 continue
 
             rtsp_status["url"] = rtsp_url
 
-            # (Re)connect if URL changed or no connection
+            # (Re)connect
             if cap is None or current_url != rtsp_url:
                 if cap is not None:
                     cap.release()
@@ -681,71 +687,110 @@ def rtsp_grabber():
                 rtsp_status["message"] = "Verbinde..."
                 logger.info(f"📹 RTSP: Connecting to {rtsp_url}")
 
-                # Use TCP transport for more reliable RTSP connections
                 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
                 cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10s connect timeout
-                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5s read timeout
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
 
                 if cap.isOpened():
                     current_url = rtsp_url
                     consecutive_fails = 0
-                    frame_counter = 0
                     rtsp_status["state"] = "connected"
                     rtsp_status["message"] = "Verbunden — warte auf Frames..."
-                    logger.info(f"📹 RTSP: Connected (TCP)! Mode={interval_mode}, Val={interval_value}")
+                    logger.info(f"📹 RTSP: Connected (TCP)!")
                 else:
                     rtsp_status["state"] = "error"
-                    rtsp_status["message"] = "Verbindung fehlgeschlagen (15s Retry)"
+                    rtsp_status["message"] = "Verbindung fehlgeschlagen (10s Retry)"
                     logger.warning(f"📹 RTSP: Connection failed to {rtsp_url}")
                     cap.release()
                     cap = None
-                    time.sleep(15)
+                    time.sleep(10)
                     continue
 
-            # Grab a frame
+            # Read frame as fast as possible
             ret, frame = cap.read()
             if not ret or frame is None:
                 consecutive_fails += 1
                 if consecutive_fails >= MAX_FAILS_BEFORE_RECONNECT:
                     rtsp_status["state"] = "error"
                     rtsp_status["message"] = "Stream abgebrochen — Reconnecting..."
-                    logger.warning(f"📹 RTSP: {consecutive_fails} consecutive failures. Reconnecting...")
                     cap.release()
                     cap = None
                     current_url = None
                     consecutive_fails = 0
-                    time.sleep(5)
+                    time.sleep(2)
                 else:
-                    # Brief pause before retrying — don't hammer a struggling stream
-                    time.sleep(0.5)
+                    time.sleep(0.1)
                 continue
 
             consecutive_fails = 0
-            frame_counter += 1
-            rtsp_status["frames_grabbed"] = frame_counter
+            rtsp_status["frames_grabbed"] += 1
+            
+            with rtsp_frame_lock:
+                rtsp_latest_frame_data = frame
 
-            # --- Interval Logic ---
-            if interval_mode == "frames":
-                if frame_counter % max(interval_value, 1) != 0:
-                    rtsp_status["frames_skipped"] += 1
-                    continue  # Skip this frame
-            # else: seconds mode — adaptive sleep at the bottom
+        except Exception as e:
+            logger.error(f"📹 RTSP Reader Error: {e}")
+            if cap is not None:
+                cap.release()
+                cap = None
+                current_url = None
+            time.sleep(5)
 
-            # --- Encode frame to JPEG in memory ---
+def rtsp_processor_thread():
+    """Consumer Thread: Wakes up based on interval settings, grabs latest frame, analyzes it."""
+    global rtsp_status, rtsp_preview_frame, rtsp_latest_frame_data
+    import cv2
+    capture_times = []
+    last_frame_grabbed = 0
+
+    while True:
+        try:
+            if rtsp_status["state"] != "connected":
+                time.sleep(1)
+                continue
+
+            mode = rtsp_status["interval_mode"]
+            val = rtsp_status["interval_value"]
+            cam_name = rtsp_status["camera_name"]
+
+            # Wait for interval
+            if mode == "frames":
+                current_count = rtsp_status["frames_grabbed"]
+                if current_count - last_frame_grabbed < max(val, 1):
+                    time.sleep(0.05)
+                    continue
+                last_frame_grabbed = current_count
+            else:
+                # seconds
+                if time.time() - rtsp_status["last_analysis_timestamp"] < val:
+                    time.sleep(0.1)
+                    continue
+                rtsp_status["last_analysis_timestamp"] = time.time()
+
+            # Grab latest frame thread-safely
+            with rtsp_frame_lock:
+                frame = rtsp_latest_frame_data
+                if frame is not None:
+                    frame = frame.copy() # Make a copy to avoid reading while writing
+            
+            if frame is None:
+                time.sleep(0.1)
+                continue
+
+            # --- Analysis starts here ---
             success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success:
                 continue
+                
             jpeg_bytes = jpeg_buf.tobytes()
-
-            # Store as preview for the status API
-            rtsp_preview_frame = jpeg_bytes
-
+            rtsp_preview_frame = jpeg_bytes  # Always update latest GUI preview frame
+            
             rtsp_status["frames_analyzed"] += 1
             rtsp_status["last_capture"] = datetime.utcnow().isoformat()
-
-            # Calculate analysis rate
+            
+            # FPS tracking
             now = time.time()
             capture_times.append(now)
             capture_times[:] = [t for t in capture_times if now - t < 60]
@@ -753,9 +798,8 @@ def rtsp_grabber():
                 elapsed = capture_times[-1] - capture_times[0]
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
-            # --- Send to Engine API for analysis (timed) ---
             analysis_start = time.time()
-            result = _analyze_frame_bytes(jpeg_bytes, f"rtsp_{camera_name}.jpg")
+            result = _analyze_frame_bytes(jpeg_bytes, f"rtsp_{cam_name}.jpg")
             analysis_duration = time.time() - analysis_start
 
             plate = result.get("plate", "")
@@ -764,23 +808,38 @@ def rtsp_grabber():
 
             rtsp_status["last_processing_ms"] = round(proc_ms, 1) if proc_ms else None
 
-            # Store EVERY analyzed frame in the debug buffer (1h rolling)
+            # Store in debug buffer
             _store_debug_frame(jpeg_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
 
             is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
 
             if is_real_plate:
-                # ✅ Real plate detected — create event in DB
+                now_str = datetime.utcnow().timestamp()
+                
+                # Event Grouping / Cooldown
+                last_seen = rtsp_cooldown.get(plate, 0)
+                rtsp_cooldown[plate] = now_str
+                
+                if now_str - last_seen < 30:
+                    logger.info(f"📹 RTSP: Plate '{plate}' ignored (Ongoing event: seen {int(now_str - last_seen)}s ago)")
+                    for p in list(rtsp_cooldown.keys()):
+                        if now_str - rtsp_cooldown[p] > 120:
+                            del rtsp_cooldown[p]
+                    continue
+                
+                for p in list(rtsp_cooldown.keys()):
+                    if now_str - rtsp_cooldown[p] > 120:
+                        del rtsp_cooldown[p]
+
                 rtsp_status["detections"] += 1
                 rtsp_status["last_plate"] = plate
                 rtsp_status["last_confidence"] = round(confidence, 2)
 
-                mode_label = f"alle {interval_value}s" if interval_mode == "seconds" else f"jeder {interval_value}. Frame"
+                mode_label = f"alle {val}s" if mode == "seconds" else f"jeder {val}. Frame"
                 rtsp_status["state"] = "connected"
                 rtsp_status["message"] = f"🚗 {plate} ({confidence:.0%}) — {rtsp_status['detections']} Erkennungen — {mode_label}"
-                logger.info(f"📹 RTSP: Plate detected: {plate} ({confidence:.0%}) — creating event")
+                logger.info(f"📹 RTSP: Plate detected: {plate} ({confidence:.0%}) — creating new event")
 
-                # Fuzzy match & create event
                 matched_plate, match_score, decision = fuzzy_match_plate(plate)
                 db = SessionLocal()
                 try:
@@ -789,7 +848,7 @@ def rtsp_grabber():
                         detected_plate=plate,
                         confidence=f"{confidence:.4f}",
                         decision=decision,
-                        series_id=f"rtsp_{camera_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                        series_id=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
                         image_count=1,
                         matched_plate=matched_plate,
                         match_score=match_score,
@@ -798,10 +857,9 @@ def rtsp_grabber():
                     db.add(event)
                     db.flush()
 
-                    # Store the image
                     event_image = models.EventImage(
                         event_id=event.id,
-                        filename=f"rtsp_{camera_name}_{datetime.utcnow().strftime('%H%M%S')}.jpg",
+                        filename=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%H%M%S')}.jpg",
                         image_data=jpeg_bytes,
                         detected_plate=plate,
                         confidence=confidence,
@@ -812,8 +870,6 @@ def rtsp_grabber():
                     db.commit()
 
                     logger.info(f"📹 RTSP: Event #{event.id} created for {plate}")
-
-                    # Trigger HA / MQTT if allowed
                     if decision == "ALLOWED":
                         trigger_ha(plate)
                         trigger_mqtt(plate)
@@ -825,31 +881,20 @@ def rtsp_grabber():
                     db.close()
 
             else:
-                # ❌ No plate / UNKNOWN — just update status, no DB write
-                mode_label = f"alle {interval_value}s" if interval_mode == "seconds" else f"jeder {interval_value}. Frame"
+                mode_label = f"alle {val}s" if mode == "seconds" else f"jeder {val}. Frame"
                 rtsp_status["state"] = "connected"
                 last_det = f" | Letzte: {rtsp_status['last_plate']}" if rtsp_status['last_plate'] else ""
                 rtsp_status["message"] = f"Aktiv — kein Kennzeichen{last_det} — {mode_label}"
 
-            # Adaptive sleep: subtract analysis time to maintain target interval
-            if interval_mode == "seconds":
-                remaining_sleep = max(0, interval_value - analysis_duration)
-                if analysis_duration > interval_value:
-                    rtsp_status["backpressure"] = True
-                    logger.warning(f"📹 RTSP: Backpressure! Analysis took {analysis_duration:.1f}s but interval is {interval_value}s")
-                else:
-                    rtsp_status["backpressure"] = False
-                time.sleep(remaining_sleep)
+            if mode == "seconds" and analysis_duration > val:
+                rtsp_status["backpressure"] = True
+                logger.warning(f"📹 RTSP: Analysis took {analysis_duration:.1f}s but interval is {val}s")
+            else:
+                rtsp_status["backpressure"] = False
 
         except Exception as e:
-            logger.error(f"📹 RTSP error: {e}")
-            rtsp_status["state"] = "error"
-            rtsp_status["message"] = f"Fehler: {str(e)[:80]}"
-            if cap is not None:
-                cap.release()
-                cap = None
-                current_url = None
-            time.sleep(10)
+            logger.error(f"📹 RTSP Processor Error: {e}")
+            time.sleep(5)
 
 
 class EventFolderHandler(FileSystemEventHandler):
@@ -1056,14 +1101,45 @@ def start_watcher():
     cleanup_thread = threading.Thread(target=check_storage_cleanup, daemon=True)
     cleanup_thread.start()
     
-    # Start RTSP grabber thread
-    rtsp_thread = threading.Thread(target=rtsp_grabber, daemon=True)
-    rtsp_thread.start()
+    # Start RTSP Reader & Processor threads
+    reader_thread = threading.Thread(target=rtsp_reader_thread, daemon=True)
+    reader_thread.start()
     
+    processor_thread = threading.Thread(target=rtsp_processor_thread, daemon=True)
+    processor_thread.start()
+    
+    # Start Folder Watcher Manager thread
+    manager_thread = threading.Thread(target=folder_watch_manager, daemon=True)
+    manager_thread.start()
+    
+    logger.info("⚡ Background services initialized.")
+    return None
+
+def folder_watch_manager():
+    """Background thread to start/stop the folder observer based on database settings."""
+    observer = None
     event_handler = EventFolderHandler()
-    observer = Observer()
-    observer.schedule(event_handler, EVENTS_DIR, recursive=True)
-    observer.start()
-    logger.info(f"⚡ Started monitoring {EVENTS_DIR} — Fast-First mode active.")
-    return observer
+    
+    while True:
+        try:
+            db = SessionLocal()
+            enabled = get_setting(db, "folder_watch_enabled", "true").lower() == "true"
+            db.close()
+            
+            if enabled and observer is None:
+                observer = Observer()
+                observer.schedule(event_handler, EVENTS_DIR, recursive=True)
+                observer.start()
+                logger.info(f"📂 Folder Watcher: Started monitoring {EVENTS_DIR}")
+            
+            elif not enabled and observer is not None:
+                observer.stop()
+                observer.join()
+                observer = None
+                logger.info("📂 Folder Watcher: Stopped monitoring.")
+                
+        except Exception as e:
+            logger.error(f"📂 Folder Watcher Manager Error: {e}")
+            
+        time.sleep(10)
 

@@ -449,28 +449,59 @@
                     const cls = p.active ? 'active' : 'inactive';
                     let seenText = "Noch nie erfasst";
                     if (p.last_seen) {
-                        const d = new Date(p.last_seen);
-                        seenText = d.toLocaleDateString('de-DE') + ' ' + d.toLocaleTimeString('de-DE');
+                        const d = new Date(p.last_seen + 'Z');
+                        seenText = d.toLocaleString('de-DE');
                     }
+
                     html += `
-                    <div class="plate-card ${cls}">
-                        <div class="plate-info">
-                            <div class="plate-text">${p.plate_text}</div>
-                            <div class="plate-desc">${p.description || ''}</div>
-                            <div style="margin-top:0.75rem; font-size:0.75rem; color:rgba(255,255,255,0.4); display:flex; gap:1rem;">
-                                <span>📸 ${p.detect_count} Erfassungen</span>
-                                <span>🕒 Zuletzt: ${seenText}</span>
+                        <div class="plate-card">
+                            <div class="plate-header">
+                                <div class="plate-number">${p.plate_text}</div>
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <button class="toggle-btn" onclick="togglePlate(${p.id}, ${p.active})">
+                                        ${p.active ? '✅ Deaktivieren' : '❌ Aktivieren'}
+                                    </button>
+                                    <button class="toggle-btn" style="color: #f87171; border-color: rgba(248,113,113,0.3);" onclick="deletePlate(${p.id}, '${p.plate_text}')">
+                                        🗑️ Löschen
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="plate-info">
+                                <div><span style="color:rgba(255,255,255,0.4)">Beschreibung:</span> ${p.description || '-'}</div>
+                            </div>
+                            <div class="plate-stats">
+                                <div><span class="stat-label">STATUS</span><span class="badge badge-${cls}">${p.active ? 'Aktiv / Erlaubt' : 'Inaktiv / Blockiert'}</span></div>
+                                <div><span class="stat-label">ERKENNUNGEN</span><span style="color:#fff; font-weight:600;">${p.detect_count}x</span></div>
+                                <div><span class="stat-label">ZULETZT ERFASST</span><span style="color:#fff;">${seenText}</span></div>
                             </div>
                         </div>
-                        <div class="plate-actions">
-                            <span class="badge ${p.active ? 'badge-active' : 'badge-inactive'}">${p.active ? 'Aktiv' : 'Inaktiv'}</span>
-                            <button class="toggle-btn" onclick="togglePlate(${p.id}, ${p.active})">${p.active ? 'Deaktivieren' : 'Aktivieren'}</button>
-                        </div>
-                    </div>`;
+                    `;
                 });
                 list.innerHTML = html;
+            } catch (e) {
+                document.getElementById('plates-list').innerHTML = '<div class="empty-state">Fehler beim Laden (API Check?)</div>';
+            }
+        }
+
+        async function deletePlate(id, plateText) {
+            if (!confirm(`Möchtest du das Kennzeichen '${plateText}' wirklich GANZ löschen?`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/plates/${id}`, {
+                    method: 'DELETE', headers: headers()
+                });
+                if (res.ok) {
+                    showMsg('success', '✓ Kennzeichen gelöscht');
+                    loadPlates();
+                } else if (res.status === 403) {
+                    alert('API Key fehlt oder falsch');
+                } else {
+                    alert('Fehler beim Löschen');
+                }
             } catch (e) { console.error(e); }
         }
+
+        // Setup polling
+        setInterval(loadPlates, 15000);
     </script>
 </body>
 

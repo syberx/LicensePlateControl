@@ -367,23 +367,54 @@
         debugStats: {},
         debugLightbox: null,
         debugOnlyPlates: false,
+        debugTimeFilter: '',
+        debugAvailableMinutes: [],
+        allFrames: [],
+        
         async loadDebug() {
             try {
                 const [framesRes, statsRes] = await Promise.all([
                     fetch('/api/debug/frames'),
                     fetch('/api/debug/stats')
                 ]);
-                let frames = await framesRes.json();
+                this.allFrames = await framesRes.json();
                 this.debugStats = await statsRes.json();
-                if (this.debugOnlyPlates) frames = frames.filter(f => f.has_plate);
-                this.debugFrames = frames.reverse();
+                
+                // Extract unique minutes for the dropdown
+                const mins = new Set();
+                this.allFrames.forEach(f => {
+                    if (f.timestamp) {
+                        const d = new Date(f.timestamp + 'Z');
+                        const minStr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                        mins.add(minStr);
+                    }
+                });
+                this.debugAvailableMinutes = Array.from(mins).sort().reverse();
+                
+                this.applyDebugFilters();
             } catch(e) { console.error('Debug load error', e); }
         },
+        
+        applyDebugFilters() {
+            let frames = [...this.allFrames];
+            if (this.debugOnlyPlates) frames = frames.filter(f => f.has_plate);
+            if (this.debugTimeFilter) {
+                frames = frames.filter(f => {
+                    const d = new Date(f.timestamp + 'Z');
+                    return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) === this.debugTimeFilter;
+                });
+            }
+            this.debugFrames = frames.reverse();
+        },
+        
         async clearDebug() {
             if (!confirm('Debug Buffer leeren?')) return;
             await fetch('/api/debug/frames', { method: 'DELETE' });
+            this.allFrames = [];
             this.debugFrames = [];
             this.debugStats = {};
+            this.debugAvailableMinutes = [];
+            this.debugTimeFilter = '';
         },
         formatDebugTime(ts) {
             if (!ts) return '';
@@ -491,6 +522,19 @@
 
                 <div x-show="tab === 'storage'" x-cloak>
                     <div class="settings-card">
+                        <div class="toggle-wrap" style="margin-bottom: 2rem;">
+                            <div>
+                                <h3>Input Folder Überwachung</h3>
+                                <p class="desc" style="margin-bottom: 0;">Überwacht den konfigurierten Ordner auf neue
+                                    Bilder und analysiert diese automatisch. Deaktiviere dies, wenn du nur RTSP nutzen
+                                    möchtest.</p>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="folder_watch_enabled">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
                         <h3>Automatische Datenbereinigung</h3>
                         <p class="desc">Lege fest, wie lange Events (inklusive hochauflösender Bilder) in der Datenbank
                             gespeichert werden sollen. Das System löscht ältere Daten automatisch im Hintergrund, um
@@ -512,6 +556,18 @@
                                     Fehlauslösungen (Status: UNKNOWN).</p>
                             </div>
                         </form>
+
+                        <div
+                            style="margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                            <h3 style="color: #f87171;">Gefahrenzone</h3>
+                            <p class="desc">Löscht die gesamte Historie unwiderruflich aus der Datenbank. Warnung: Dies
+                                kann nicht rückgängig gemacht werden!</p>
+                            <button class="btn"
+                                style="background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.3); margin-top: 0.5rem;"
+                                onclick="clearAllEvents()">
+                                🗑️ Alle Events & Bilder löschen
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -675,16 +731,26 @@
                             </div>
                         </div>
 
-                        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                        <div
+                            style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
                             <button class="btn"
                                 style="background: rgba(129,140,248,0.15); color: #818cf8; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer;"
                                 @click="loadDebug()">↻ Aktualisieren</button>
                             <button class="btn"
                                 style="background: rgba(248,113,113,0.12); color: #f87171; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer;"
                                 @click="clearDebug()">🗑️ Leeren</button>
+
+                            <select x-model="debugTimeFilter" @change="applyDebugFilters()"
+                                style="background: #1e1e2d; color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 0.35rem 0.5rem; font-size: 0.75rem; outline: none; cursor: pointer;">
+                                <option value="">⏳ Gesamter Zeitraum</option>
+                                <template x-for="min in debugAvailableMinutes" :key="min">
+                                    <option :value="min" x-text="'Minute: ' + min"></option>
+                                </template>
+                            </select>
+
                             <label
                                 style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: rgba(255,255,255,0.5); margin-left: auto; cursor: pointer;">
-                                <input type="checkbox" x-model="debugOnlyPlates" @change="loadDebug()"
+                                <input type="checkbox" x-model="debugOnlyPlates" @change="applyDebugFilters()"
                                     style="accent-color: #34d399;">
                                 Nur Erkennungen
                             </label>
@@ -788,7 +854,7 @@
                 'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
                 'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_interval_mode', 'rtsp_camera_name',
-                'cleanup_days_known', 'cleanup_days_unknown'
+                'cleanup_days_known', 'cleanup_days_unknown', 'folder_watch_enabled'
             ];
             let hasError = false;
 
@@ -813,6 +879,26 @@
                 showMsg('error', '✗ Fehler beim Speichern (API Key prüfen!)');
             } else {
                 showMsg('success', '✓ Einstellungen erfolgreich gespeichert');
+            }
+        }
+
+        async function clearAllEvents() {
+            if (!confirm("⚠️ MÖCHTEST DU WIRKLICH ALLE DATEN LÖSCHEN?\n\nDies löscht alle gespeicherten Erkennungen und Bilder unwiderruflich aus der Datenbank.")) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/events`, {
+                    method: 'DELETE',
+                    headers: headers()
+                });
+                if (res.ok) {
+                    showMsg('success', '✓ Gesamte Historie gelöscht!');
+                } else if (res.status === 403) {
+                    showMsg('error', '✗ API Key fehlt oder falsch');
+                } else {
+                    showMsg('error', '✗ Fehler beim Löschen der Daten');
+                }
+            } catch (e) {
+                showMsg('error', '✗ Verbindungsfehler');
             }
         }
 
