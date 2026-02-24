@@ -8,19 +8,9 @@ try:
     # Use the models from fast-alpr HuggingFace demo that work well for European plates:
     # Detector: yolo-v9-t-640 = 640px input, great accuracy for plate localization
     # OCR: cct-s-v1 = "small" model (better than default "xs"), trained on global plates
-    import onnxruntime as ort
-    
-    available_providers = ort.get_available_providers()
-    selected_providers = ["CPUExecutionProvider"]
-    
-    if "OpenVINOExecutionProvider" in available_providers:
-        print("INFO: OpenVINO explicitly enabled for Intel CPU acceleration")
-        selected_providers = ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
-        
     alpr = ALPR(
         detector_model="yolo-v9-t-640-license-plate-end2end",
         ocr_model="cct-s-v1-global-model",
-        providers=selected_providers
     )
     print("INFO: ALPR initialized with yolo-v9-t-640 detector + cct-s-v1 OCR")
 except ImportError as e:

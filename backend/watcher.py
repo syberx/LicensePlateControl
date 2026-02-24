@@ -870,6 +870,7 @@ def rtsp_processor_thread():
             # Handle detection
             if is_real_plate:
                 matched_plate, match_score, decision = fuzzy_match_plate(plate)
+                match_score_val = match_score if match_score is not None else 0.0
                 
                 # If no active session, start one
                 if not rtsp_active_session["is_active"]:
@@ -878,7 +879,7 @@ def rtsp_processor_thread():
                     rtsp_active_session["images"] = []
                     rtsp_active_session["best_plate"] = plate
                     rtsp_active_session["best_conf"] = confidence
-                    rtsp_active_session["best_match_score"] = match_score
+                    rtsp_active_session["best_match_score"] = match_score_val
                     rtsp_active_session["decision"] = decision
                     rtsp_active_session["has_triggered"] = False
                     logger.info(f"📹 RTSP: New vehicle session started with '{plate}'")
@@ -887,10 +888,10 @@ def rtsp_processor_thread():
                     rtsp_active_session["last_seen_time"] = now_str
                     
                     # Update 'best' if this frame is better
-                    if match_score > rtsp_active_session["best_match_score"] or (match_score == rtsp_active_session["best_match_score"] and confidence > rtsp_active_session["best_conf"]):
+                    if match_score_val > rtsp_active_session["best_match_score"] or (match_score_val == rtsp_active_session["best_match_score"] and confidence > rtsp_active_session["best_conf"]):
                         rtsp_active_session["best_plate"] = plate
                         rtsp_active_session["best_conf"] = confidence
-                        rtsp_active_session["best_match_score"] = match_score
+                        rtsp_active_session["best_match_score"] = match_score_val
                         rtsp_active_session["decision"] = decision
                 
                 # --- FAST-FIRST TRIGGER LOGIC ---
