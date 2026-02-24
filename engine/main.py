@@ -8,49 +8,6 @@ try:
     # Use the models from fast-alpr HuggingFace demo that work well for European plates:
     # Detector: yolo-v9-t-640 = 640px input, great accuracy for plate localization
     # OCR: cct-s-v1 = "small" model (better than default "xs"), trained on global plates
-    import onnxruntime as ort
-    
-    # ---------------------------------------------------------
-    # MONKEY-PATCH for OpenVINO ONNXRuntime
-    # Forces open-image-models to use the Intel GPU via OpenVINO
-    # instead of rendering on the CPU.
-    # ---------------------------------------------------------
-    original_InferenceSession = ort.InferenceSession
-
-    def patched_InferenceSession(path_or_bytes, sess_options=None, providers=None, provider_options=None, **kwargs):
-        print(f"\n--- ONNX Session Initialization ---")
-        print(f"Model: {path_or_bytes}")
-        print(f"Available Providers: {ort.get_available_providers()}")
-        print(f"Requested Providers: {providers}")
-        
-        session = None
-        if providers and "OpenVINOExecutionProvider" in providers:
-            print(f"INFO: Intercepted ONNX Session Creation. Forcing Intel iGPU settings!")
-            forced_options = {
-                'device_type': 'GPU',
-                'precision': 'FP16'
-            }
-            provider_opt_list = [forced_options] + [{}] * (len(providers) - 1)
-            try:
-                session = original_InferenceSession(path_or_bytes, sess_options, providers, provider_options=provider_opt_list, **kwargs)
-            except Exception as e:
-                print(f"WARNING: OpenVINO GPU Init Failed: {e}. Falling back to default settings.")
-                pass
-                
-        if session is None:
-             session = original_InferenceSession(path_or_bytes, sess_options, providers, provider_options, **kwargs)
-             
-        # Extract the actual providers the session ended up using
-        actual_providers = session.get_providers()
-        print(f"SUCCESS: Session created! Active Providers: {actual_providers}")
-        if "CPUExecutionProvider" in actual_providers and "OpenVINOExecutionProvider" not in actual_providers:
-            print("WARNING: Model is running entirely on CPU! OpenVINO fallback occurred.")
-        print(f"-----------------------------------\n")
-        
-        return session
-
-    ort.InferenceSession = patched_InferenceSession
-    # ---------------------------------------------------------
 
     alpr = ALPR(
         detector_model="yolo-v9-t-640-license-plate-end2end",

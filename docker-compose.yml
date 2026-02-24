@@ -52,11 +52,8 @@ services:
     volumes:
       - ./volumes/models:/models
       - ./volumes/events:/events
-    devices:
-      - /dev/dri:/dev/dri
     environment:
       - HF_HOME=/models
-      - ORT_PROVIDERS=OpenVINOExecutionProvider,CPUExecutionProvider
     networks:
       - lpc-network
 
