@@ -424,6 +424,7 @@ def process_followup_images(folder_path: str):
     # Images beyond this limit must be deleted to prevent the folder from filling up
     image_files = sorted(new_images, key=os.path.getmtime, reverse=True)
     process_list = image_files[:10]
+    process_list.reverse() # Restore chronological order (oldest to newest) for timeline display and processing
     ignore_list = image_files[10:]
     
     for img in new_images:
