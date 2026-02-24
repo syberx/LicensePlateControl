@@ -585,6 +585,30 @@ rtsp_status = {
 # Latest RTSP preview frame (JPEG bytes) — served via API
 rtsp_preview_frame = None
 
+# --- Debug Frame Buffer (1-hour rolling storage) ---
+# Stores ALL analyzed frames with metadata for forensic debugging.
+# Each entry: {"id": int, "timestamp": str, "jpeg": bytes, "plate": str, "confidence": float, "processing_ms": float}
+debug_frame_buffer = deque(maxlen=3600)  # Max ~1h at 1fps
+debug_frame_counter = 0
+DEBUG_BUFFER_MAX_AGE_SECONDS = 3600  # 1 hour
+
+def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None):
+    """Store a frame in the debug ring buffer with auto-purge of old entries."""
+    global debug_frame_counter
+    debug_frame_counter += 1
+    entry = {
+        "id": debug_frame_counter,
+        "timestamp": datetime.utcnow().isoformat(),
+        "jpeg": jpeg_bytes,
+        "plate": plate,
+        "confidence": round(confidence, 3),
+        "processing_ms": round(processing_ms, 1) if processing_ms else None,
+    }
+    debug_frame_buffer.append(entry)
+    # Purge entries older than 1 hour
+    cutoff = datetime.utcnow() - timedelta(seconds=DEBUG_BUFFER_MAX_AGE_SECONDS)
+    while debug_frame_buffer and datetime.fromisoformat(debug_frame_buffer[0]["timestamp"]) < cutoff:
+        debug_frame_buffer.popleft()
 
 def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
     """Send JPEG bytes to the engine API and return the best plate result."""
@@ -739,6 +763,9 @@ def rtsp_grabber():
             proc_ms = result.get("processing_time_ms")
 
             rtsp_status["last_processing_ms"] = round(proc_ms, 1) if proc_ms else None
+
+            # Store EVERY analyzed frame in the debug buffer (1h rolling)
+            _store_debug_frame(jpeg_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
 
             is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
 

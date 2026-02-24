@@ -361,7 +361,43 @@
         </div>
     </nav>
 
-    <div class="container" x-data="{ tab: 'ha' }">
+    <div class="container" x-data="{
+        tab: 'ha',
+        debugFrames: [],
+        debugStats: {},
+        debugLightbox: null,
+        debugOnlyPlates: false,
+        async loadDebug() {
+            try {
+                const [framesRes, statsRes] = await Promise.all([
+                    fetch('/api/debug/frames'),
+                    fetch('/api/debug/stats')
+                ]);
+                let frames = await framesRes.json();
+                this.debugStats = await statsRes.json();
+                if (this.debugOnlyPlates) frames = frames.filter(f => f.has_plate);
+                this.debugFrames = frames.reverse();
+            } catch(e) { console.error('Debug load error', e); }
+        },
+        async clearDebug() {
+            if (!confirm('Debug Buffer leeren?')) return;
+            await fetch('/api/debug/frames', { method: 'DELETE' });
+            this.debugFrames = [];
+            this.debugStats = {};
+        },
+        formatDebugTime(ts) {
+            if (!ts) return '';
+            const d = new Date(ts + 'Z');
+            return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        },
+        debugTimeRange() {
+            if (!this.debugStats.oldest || !this.debugStats.newest) return '—';
+            const o = new Date(this.debugStats.oldest + 'Z');
+            const n = new Date(this.debugStats.newest + 'Z');
+            const fmt = (d) => d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+            return fmt(o) + ' – ' + fmt(n);
+        }
+    }">
         <h1 class="section-title">Einstellungen & Integrationen</h1>
 
         <div class="settings-layout">
@@ -374,6 +410,8 @@
                     Stream</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'storage'}"
                     @click.prevent="tab = 'storage'">Speicher / Bereinigung</a>
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'debug'}"
+                    @click.prevent="tab = 'debug'; loadDebug()">🔬 Debug Frames</a>
             </div>
 
             <div class="settings-content">
@@ -597,6 +635,102 @@
                                         x-text="status.last_confidence ? (status.last_confidence * 100).toFixed(0) + '%' : ''"></span>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Debug Frames Tab -->
+                <div x-show="tab === 'debug'" x-cloak>
+                    <div class="settings-card">
+                        <h3>🔬 Debug Frame Buffer</h3>
+                        <p class="desc">RAW-Frames der letzten Stunde aus dem RTSP-Stream. Für Fehlersuche und
+                            Nachforschung.</p>
+
+                        <!-- Buffer Stats -->
+                        <div
+                            style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 1rem 0; font-size: 0.75rem;">
+                            <div
+                                style="background: rgba(255,255,255,0.04); padding: 0.5rem 0.75rem; border-radius: 6px; text-align: center;">
+                                <div style="color: rgba(255,255,255,0.35);">Frames</div>
+                                <div style="color: #e0e0e0; font-weight: 700; font-size: 1.1rem;"
+                                    x-text="debugStats.frame_count || 0"></div>
+                            </div>
+                            <div
+                                style="background: rgba(255,255,255,0.04); padding: 0.5rem 0.75rem; border-radius: 6px; text-align: center;">
+                                <div style="color: rgba(255,255,255,0.35);">Speicher</div>
+                                <div style="color: #fbbf24; font-weight: 700; font-size: 1.1rem;"
+                                    x-text="(debugStats.size_mb || 0) + ' MB'"></div>
+                            </div>
+                            <div
+                                style="background: rgba(255,255,255,0.04); padding: 0.5rem 0.75rem; border-radius: 6px; text-align: center;">
+                                <div style="color: rgba(255,255,255,0.35);">Erkennungen</div>
+                                <div style="color: #34d399; font-weight: 700; font-size: 1.1rem;"
+                                    x-text="debugStats.detections || 0"></div>
+                            </div>
+                            <div
+                                style="background: rgba(255,255,255,0.04); padding: 0.5rem 0.75rem; border-radius: 6px; text-align: center;">
+                                <div style="color: rgba(255,255,255,0.35);">Zeitraum</div>
+                                <div style="color: #818cf8; font-weight: 600; font-size: 0.7rem;"
+                                    x-text="debugTimeRange()"></div>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                            <button class="btn"
+                                style="background: rgba(129,140,248,0.15); color: #818cf8; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer;"
+                                @click="loadDebug()">↻ Aktualisieren</button>
+                            <button class="btn"
+                                style="background: rgba(248,113,113,0.12); color: #f87171; border: none; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer;"
+                                @click="clearDebug()">🗑️ Leeren</button>
+                            <label
+                                style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: rgba(255,255,255,0.5); margin-left: auto; cursor: pointer;">
+                                <input type="checkbox" x-model="debugOnlyPlates" @change="loadDebug()"
+                                    style="accent-color: #34d399;">
+                                Nur Erkennungen
+                            </label>
+                        </div>
+
+                        <!-- Lightbox -->
+                        <div x-show="debugLightbox" @click.self="debugLightbox=null"
+                            style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 999; display: flex; align-items: center; justify-content: center; cursor: zoom-out;">
+                            <div style="max-width: 90vw; max-height: 90vh; position: relative;">
+                                <img :src="debugLightbox ? '/api/debug/frames/' + debugLightbox.id : ''"
+                                    style="max-width: 90vw; max-height: 85vh; border-radius: 8px;">
+                                <div style="text-align: center; margin-top: 0.5rem; color: #fff; font-size: 0.8rem;">
+                                    <span x-text="debugLightbox ? formatDebugTime(debugLightbox.timestamp) : ''"></span>
+                                    <template x-if="debugLightbox && debugLightbox.has_plate">
+                                        <span style="margin-left: 1rem; color: #34d399; font-weight: 700;"
+                                            x-text="debugLightbox.plate + ' (' + (debugLightbox.confidence * 100).toFixed(0) + '%)'"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Frame Gallery -->
+                        <div
+                            style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; max-height: 500px; overflow-y: auto; padding: 0.25rem;">
+                            <template x-for="frame in debugFrames" :key="frame.id">
+                                <div @click="debugLightbox = frame"
+                                    style="position: relative; border-radius: 6px; overflow: hidden; cursor: pointer; transition: transform 0.15s;"
+                                    :style="frame.has_plate ? 'border: 2px solid #34d399;' : 'border: 1px solid rgba(255,255,255,0.08);'"
+                                    onmouseover="this.style.transform='scale(1.03)'"
+                                    onmouseout="this.style.transform='scale(1)'">
+                                    <img :src="'/api/debug/frames/' + frame.id"
+                                        style="width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block;"
+                                        loading="lazy">
+                                    <div style="position: absolute; bottom: 0; left: 0; right: 0; padding: 0.25rem 0.4rem; background: linear-gradient(transparent, rgba(0,0,0,0.8)); font-size: 0.6rem; color: rgba(255,255,255,0.7);"
+                                        x-text="formatDebugTime(frame.timestamp)"></div>
+                                    <template x-if="frame.has_plate">
+                                        <div style="position: absolute; top: 0.2rem; right: 0.2rem; background: rgba(52,211,153,0.9); color: #000; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.6rem; font-weight: 700;"
+                                            x-text="frame.plate"></div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+
+                        <div x-show="debugFrames.length === 0"
+                            style="text-align: center; padding: 2rem; color: rgba(255,255,255,0.3); font-size: 0.85rem;">
+                            Keine Frames im Buffer. RTSP-Stream muss aktiv sein.
                         </div>
                     </div>
                 </div>

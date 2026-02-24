@@ -234,6 +234,57 @@ def get_logs(level: str = None, source: str = None, limit: int = 200):
 def clear_logs():
     """Clear the in-memory log buffer."""
     from watcher import log_handler
-    with log_handler.lock:
-        log_handler.entries.clear()
+    log_handler.entries.clear()
     return {"status": "ok", "message": "Logs cleared"}
+
+# --- Debug Frame Buffer ---
+
+@router.get("/api/debug/frames")
+def get_debug_frames():
+    """Return metadata of all frames in the debug buffer (without image data)."""
+    from watcher import debug_frame_buffer
+    return [
+        {
+            "id": e["id"],
+            "timestamp": e["timestamp"],
+            "plate": e["plate"],
+            "confidence": e["confidence"],
+            "processing_ms": e["processing_ms"],
+            "has_plate": bool(e["plate"] and e["plate"] != "UNKNOWN" and e["confidence"] > 0.3),
+        }
+        for e in debug_frame_buffer
+    ]
+
+@router.get("/api/debug/frames/{frame_id}")
+def get_debug_frame_image(frame_id: int):
+    """Serve a single debug frame as JPEG by its ID."""
+    from watcher import debug_frame_buffer
+    for entry in debug_frame_buffer:
+        if entry["id"] == frame_id:
+            return Response(content=entry["jpeg"], media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Frame not found")
+
+@router.delete("/api/debug/frames")
+def clear_debug_frames():
+    """Clear the debug frame buffer."""
+    from watcher import debug_frame_buffer
+    debug_frame_buffer.clear()
+    return {"status": "ok", "message": "Debug buffer cleared"}
+
+@router.get("/api/debug/stats")
+def get_debug_stats():
+    """Return debug buffer statistics."""
+    from watcher import debug_frame_buffer, DEBUG_BUFFER_MAX_AGE_SECONDS
+    count = len(debug_frame_buffer)
+    size_mb = sum(len(e["jpeg"]) for e in debug_frame_buffer) / (1024 * 1024) if count else 0
+    plates = sum(1 for e in debug_frame_buffer if e["plate"] and e["plate"] != "UNKNOWN" and e["confidence"] > 0.3)
+    oldest = debug_frame_buffer[0]["timestamp"] if count else None
+    newest = debug_frame_buffer[-1]["timestamp"] if count else None
+    return {
+        "frame_count": count,
+        "size_mb": round(size_mb, 1),
+        "detections": plates,
+        "oldest": oldest,
+        "newest": newest,
+        "max_age_seconds": DEBUG_BUFFER_MAX_AGE_SECONDS,
+    }
