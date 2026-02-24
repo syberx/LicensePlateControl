@@ -591,7 +591,8 @@ rtsp_active_session = {
     "best_plate": "",
     "best_conf": 0.0,
     "best_match_score": 0.0,
-    "decision": "DENIED"
+    "decision": "DENIED",
+    "has_triggered": False
 }
 
 # Latest RTSP preview frame (JPEG bytes) — served via API
@@ -839,6 +840,7 @@ def rtsp_processor_thread():
                     rtsp_active_session["best_conf"] = confidence
                     rtsp_active_session["best_match_score"] = match_score
                     rtsp_active_session["decision"] = decision
+                    rtsp_active_session["has_triggered"] = False
                     logger.info(f"📹 RTSP: New vehicle session started with '{plate}'")
                 else:
                     # Update active session timer
@@ -850,6 +852,14 @@ def rtsp_processor_thread():
                         rtsp_active_session["best_conf"] = confidence
                         rtsp_active_session["best_match_score"] = match_score
                         rtsp_active_session["decision"] = decision
+                
+                # --- FAST-FIRST TRIGGER LOGIC ---
+                # Check if we should trigger immediately instead of waiting for 20s timeout
+                if rtsp_active_session["decision"] == "ALLOWED" and not rtsp_active_session["has_triggered"]:
+                    logger.info(f"📹 RTSP: Immediate trigger fired for '{rtsp_active_session['best_plate']}'")
+                    trigger_ha(rtsp_active_session["best_plate"])
+                    trigger_mqtt(rtsp_active_session["best_plate"])
+                    rtsp_active_session["has_triggered"] = True
                         
                 # Add current frame to session gallery
                 rtsp_active_session["images"].append({
@@ -936,9 +946,7 @@ def rtsp_processor_thread():
                     db.commit()
                     logger.info(f"📹 RTSP: Consolidated Event #{event.id} created successfully!")
 
-                    if s_dec_final == "ALLOWED":
-                        trigger_ha(s_plate)
-                        trigger_mqtt(s_plate)
+                    # Note: HA/MQTT trigger was already fired immediately upon first match!
 
                 except Exception as e:
                     db.rollback()
@@ -954,7 +962,8 @@ def rtsp_processor_thread():
                     "best_plate": "",
                     "best_conf": 0.0,
                     "best_match_score": 0.0,
-                    "decision": "DENIED"
+                    "decision": "DENIED",
+                    "has_triggered": False
                 }
 
             if mode == "seconds" and analysis_duration > val:
