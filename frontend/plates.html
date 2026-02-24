@@ -401,9 +401,11 @@
 
             try {
                 const res = await fetch(`${API_BASE}/plates`, {
-                    method: 'POST', headers: headers(),
+                    method: 'POST',
+                    headers: headers(),
                     body: JSON.stringify({ plate_text: plate, description: desc })
                 });
+
                 if (res.ok) {
                     showMsg('success', '✓ Kennzeichen hinzugefügt');
                     document.getElementById('plate-input').value = '';
@@ -414,7 +416,9 @@
                 } else {
                     showMsg('error', '✗ Fehler (existiert evtl. schon)');
                 }
-            } catch (e) { showMsg('error', '✗ Verbindungsfehler'); }
+            } catch (e) {
+                showMsg('error', '✗ Verbindungsfehler');
+            }
         }
 
         async function togglePlate(id, current) {
