@@ -591,7 +591,7 @@
             <div class="header-controls">
                 <input type="text" x-model="search" class="search-input" placeholder="🔍 Suchen (Kennzeichen...)">
                 <button class="toggle-btn" :class="showUnknown ? 'active' : ''" @click="showUnknown = !showUnknown">
-                    <span x-text="showUnknown ? '✓ Unerkannte sichtbar' : '👁 Unerkannte anzeigen'"></span>
+                    <span x-text="showUnknown ? '✓ Alles sichtbar' : '👁 ALLES ANZEIGEN'"></span>
                 </button>
             </div>
         </div>
@@ -767,9 +767,9 @@
                 filteredEvents() {
                     let result = this.events;
 
-                    // Filter out UNKNOWN plates if the toggle is false
+                    // Filter out UNKNOWN and empty plates if the toggle is false
                     if (!this.showUnknown) {
-                        result = result.filter(e => e.detected_plate !== 'UNKNOWN' && e.detected_plate !== null);
+                        result = result.filter(e => e.detected_plate !== 'UNKNOWN' && e.detected_plate !== null && e.detected_plate.trim() !== '');
                     }
 
                     if (this.search.trim() === '') return result;
