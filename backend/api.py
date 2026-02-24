@@ -66,6 +66,7 @@ class EventResponse(BaseModel):
     match_score: Optional[float] = None
     ha_triggered: Optional[bool] = False
     mqtt_triggered: Optional[bool] = False
+    trigger_timestamp: Optional[datetime.datetime] = None
     processing_time_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)

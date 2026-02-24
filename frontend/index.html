@@ -681,11 +681,22 @@
                                     </span>
                                 </div>
                                 <div class="info-item">
-                                    <span class="info-label">Home Assistant Trigger</span>
+                                    <span class="info-label">Smart Home Trigger</span>
                                     <span class="info-val">
-                                        <span x-show="e.ha_triggered" style="color:#60a5fa;">✓ Ausgelöst</span>
-                                        <span x-show="!e.ha_triggered" style="color:rgba(255,255,255,0.4);">— Nicht
-                                            ausgelöst</span>
+                                        <template x-if="e.ha_triggered || e.mqtt_triggered">
+                                            <span>
+                                                <span style="color:#60a5fa;">✓ Ausgelöst</span>
+                                                <template x-if="e.trigger_timestamp">
+                                                    <span
+                                                        style="color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-left: 4px;">
+                                                        (<span x-text="formatDate(e.trigger_timestamp)"></span>)
+                                                    </span>
+                                                </template>
+                                            </span>
+                                        </template>
+                                        <template x-if="!e.ha_triggered && !e.mqtt_triggered">
+                                            <span style="color:rgba(255,255,255,0.4);">— Nicht ausgelöst</span>
+                                        </template>
                                     </span>
                                 </div>
                                 <div class="info-item">

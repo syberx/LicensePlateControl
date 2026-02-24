@@ -27,6 +27,7 @@ class Event(Base):
     match_score = Column(Float, nullable=True)
     ha_triggered = Column(Boolean, default=False)
     mqtt_triggered = Column(Boolean, default=False)
+    trigger_timestamp = Column(DateTime, nullable=True)
     # Phase 6: Engine diagnostics
     processing_time_ms = Column(Float, nullable=True)
     # Phase 7: Relationship to images

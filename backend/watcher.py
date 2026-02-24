@@ -362,11 +362,15 @@ def process_first_image(folder_path: str, img_path: str):
     
     ha_triggered = False
     mqtt_triggered = False
+    trigger_ts = None
     if decision == "allowed":
         if ha_enabled:
             ha_triggered = trigger_ha(matched_plate or plate)
         if mqtt_enabled:
             mqtt_triggered = trigger_mqtt(matched_plate or plate)
+            
+        if ha_triggered or mqtt_triggered:
+            trigger_ts = datetime.utcnow()
     
     # Create event in DB
     sid = str(uuid.uuid4())[:8]
@@ -383,6 +387,7 @@ def process_first_image(folder_path: str, img_path: str):
             match_score=match_score,
             ha_triggered=ha_triggered,
             mqtt_triggered=mqtt_triggered,
+            trigger_timestamp=trigger_ts,
             processing_time_ms=result.get("processing_time_ms")
         )
         db.add(new_event)
@@ -882,6 +887,7 @@ def rtsp_processor_thread():
                     rtsp_active_session["best_match_score"] = match_score_val
                     rtsp_active_session["decision"] = decision
                     rtsp_active_session["has_triggered"] = False
+                    rtsp_active_session["trigger_timestamp"] = None
                     logger.info(f"📹 RTSP: New vehicle session started with '{plate}'")
                 else:
                     # Update active session timer
@@ -898,9 +904,11 @@ def rtsp_processor_thread():
                 # Check if we should trigger immediately instead of waiting for 20s timeout
                 if rtsp_active_session["decision"] == "ALLOWED" and not rtsp_active_session["has_triggered"]:
                     logger.info(f"📹 RTSP: Immediate trigger fired for '{rtsp_active_session['best_plate']}'")
-                    trigger_ha(rtsp_active_session["best_plate"])
-                    trigger_mqtt(rtsp_active_session["best_plate"])
-                    rtsp_active_session["has_triggered"] = True
+                    ha_ok = trigger_ha(rtsp_active_session["best_plate"])
+                    mq_ok = trigger_mqtt(rtsp_active_session["best_plate"])
+                    rtsp_active_session["has_triggered"] = ha_ok or mq_ok
+                    if rtsp_active_session["has_triggered"]:
+                        rtsp_active_session["trigger_timestamp"] = datetime.utcnow()
                         
                 # Add current frame to session gallery
                 rtsp_active_session["images"].append({
@@ -967,6 +975,8 @@ def rtsp_processor_thread():
                         image_count=len(s_imgs),
                         matched_plate=s_matched_plate,
                         match_score=s_match_score,
+                        ha_triggered=rtsp_active_session.get("has_triggered", False),
+                        trigger_timestamp=rtsp_active_session.get("trigger_timestamp"),
                         processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None
                     )
                     db.add(event)
