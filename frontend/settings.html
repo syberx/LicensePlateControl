@@ -369,6 +369,8 @@
                     Assistant</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'mqtt'}" @click.prevent="tab = 'mqtt'">MQTT
                     Broker</a>
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'storage'}"
+                    @click.prevent="tab = 'storage'">Speicher / Bereinigung</a>
             </div>
 
             <div class="settings-content">
@@ -446,6 +448,32 @@
                     </div>
                 </div>
 
+                <div x-show="tab === 'storage'" x-cloak>
+                    <div class="settings-card">
+                        <h3>Automatische Datenbereinigung</h3>
+                        <p class="desc">Lege fest, wie lange Events (inklusive hochauflösender Bilder) in der Datenbank
+                            gespeichert werden sollen. Das System löscht ältere Daten automatisch im Hintergrund, um
+                            Speicherplatz zu sparen.</p>
+
+                        <form id="storage-form" onsubmit="return false;">
+                            <div class="form-group">
+                                <label class="form-label">Erkannte Kennzeichen behalten (Tage)</label>
+                                <input type="number" id="cleanup_days_known" class="form-input" placeholder="30"
+                                    value="30" min="1">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Aufbewahrungsdauer für
+                                    erfolgreich erkannte Fahrzeuge.</p>
+                            </div>
+                            <div class="form-group" style="margin-top: 1.5rem;">
+                                <label class="form-label">Unerkannte / Leere Bilder behalten (Tage)</label>
+                                <input type="number" id="cleanup_days_unknown" class="form-input" placeholder="2"
+                                    value="2" min="1">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Aufbewahrungsdauer für
+                                    Fehlauslösungen (Status: UNKNOWN).</p>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
                 <button class="btn btn-primary" onclick="saveSettings()">Alle Einstellungen Speichern</button>
                 <div class="msg" id="form-msg"></div>
             </div>
@@ -495,11 +523,17 @@
         }
 
         async function saveSettings() {
-            const keys = ['ha_enabled', 'ha_url', 'ha_service', 'ha_token', 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass'];
+            const keys = [
+                'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
+                'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
+                'cleanup_days_known', 'cleanup_days_unknown'
+            ];
             let hasError = false;
 
             for (const key of keys) {
                 const el = document.getElementById(key);
+                if (!el) continue;
+
                 const val = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
                 try {
                     const res = await fetch(`${API_BASE}/settings`, {

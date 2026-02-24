@@ -2,6 +2,7 @@ import time
 import os
 import glob
 import threading
+from datetime import datetime, timedelta
 import requests
 import re
 import uuid
@@ -463,6 +464,54 @@ def check_series_expiry():
                 s = active_series.pop(fp)
                 logger.info(f"Series {s['series_id']} expired (Event #{s['event_id']})")
 
+
+def check_storage_cleanup():
+    """Background thread: runs hourly limits cleanup based on settings."""
+    while True:
+        try:
+            db = SessionLocal()
+            days_known = int(get_setting(db, "cleanup_days_known", "30"))
+            days_unknown = int(get_setting(db, "cleanup_days_unknown", "2"))
+            
+            now = datetime.utcnow()
+            cutoff_known = now - timedelta(days=days_known)
+            cutoff_unknown = now - timedelta(days=days_unknown)
+            
+            # Find old UNKNOWN events
+            old_unknown = db.query(models.Event).filter(
+                models.Event.detected_plate == "UNKNOWN",
+                models.Event.timestamp < cutoff_unknown
+            ).all()
+            
+            # Find old KNOWN events
+            old_known = db.query(models.Event).filter(
+                models.Event.detected_plate != "UNKNOWN",
+                models.Event.timestamp < cutoff_known
+            ).all()
+            
+            events_to_delete = old_unknown + old_known
+            
+            if events_to_delete:
+                logger.info(f"🧹 Storage Cleanup: Found {len(events_to_delete)} old events. Reclaiming space...")
+                deleted_count = 0
+                for event in events_to_delete:
+                    # Delete child images (blob data) first to avoid FK errors & memory bloat
+                    db.query(models.EventImage).filter(models.EventImage.event_id == event.id).delete(synchronize_session=False)
+                    db.delete(event)
+                    deleted_count += 1
+                
+                db.commit()
+                logger.info(f"🧹 Storage Cleanup: Success. Deleted {deleted_count} events and their images.")
+                
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Storage cleanup failed: {e}")
+        finally:
+            db.close()
+            
+        time.sleep(3600)  # Check once an hour
+
+
 class EventFolderHandler(FileSystemEventHandler):
     def process_path(self, path):
         ext = path.lower().split('.')[-1]
@@ -660,9 +709,12 @@ def start_watcher():
             for series_imgs in series_groups:
                 process_startup_series(folder_path, series_imgs)
     
-    # Start series expiry background thread
+    # Start series expiry and cleanup background threads
     expiry_thread = threading.Thread(target=check_series_expiry, daemon=True)
     expiry_thread.start()
+    
+    cleanup_thread = threading.Thread(target=check_storage_cleanup, daemon=True)
+    cleanup_thread.start()
     
     event_handler = EventFolderHandler()
     observer = Observer()

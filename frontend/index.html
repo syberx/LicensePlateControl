@@ -764,9 +764,17 @@
                 },
 
                 filteredEvents() {
-                    if (this.search.trim() === '') return this.events;
+                    let result = this.events;
+
+                    // Filter out UNKNOWN plates if the toggle is false
+                    if (!this.showUnknown) {
+                        result = result.filter(e => e.detected_plate !== 'UNKNOWN' && e.detected_plate !== null);
+                    }
+
+                    if (this.search.trim() === '') return result;
+
                     const term = this.search.toLowerCase();
-                    return this.events.filter(e =>
+                    return result.filter(e =>
                         (e.detected_plate && e.detected_plate.toLowerCase().includes(term)) ||
                         (e.matched_plate && e.matched_plate.toLowerCase().includes(term)) ||
                         (e.decision && e.decision.toLowerCase().includes(term))
