@@ -6,3 +6,4 @@ watchdog
 requests
 psycopg2-binary
 paho-mqtt
+opencv-python-headless

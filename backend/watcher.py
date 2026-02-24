@@ -512,6 +512,90 @@ def check_storage_cleanup():
         time.sleep(3600)  # Check once an hour
 
 
+def rtsp_grabber():
+    """Background thread: grab frames from an RTSP stream at configurable intervals."""
+    import cv2
+    
+    cap = None
+    current_url = None
+    consecutive_fails = 0
+    MAX_FAILS_BEFORE_RECONNECT = 5
+    
+    while True:
+        try:
+            db = SessionLocal()
+            enabled = get_setting(db, "rtsp_enabled", "false").lower() == "true"
+            rtsp_url = get_setting(db, "rtsp_url", "")
+            interval = int(get_setting(db, "rtsp_interval", "3"))
+            camera_name = get_setting(db, "rtsp_camera_name", "cam1")
+            db.close()
+            
+            if not enabled or not rtsp_url:
+                # Release capture if it was open
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                    current_url = None
+                    logger.info("📹 RTSP Grabber: Disabled or no URL. Sleeping...")
+                time.sleep(10)  # Check again in 10s if settings changed
+                continue
+            
+            # (Re)connect if URL changed or no connection
+            if cap is None or current_url != rtsp_url:
+                if cap is not None:
+                    cap.release()
+                logger.info(f"📹 RTSP Grabber: Connecting to {rtsp_url} ...")
+                cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer lag
+                if cap.isOpened():
+                    current_url = rtsp_url
+                    consecutive_fails = 0
+                    logger.info(f"📹 RTSP Grabber: Connected! Interval: {interval}s, Camera: {camera_name}")
+                else:
+                    logger.warning(f"📹 RTSP Grabber: Failed to connect to {rtsp_url}. Retrying in 15s...")
+                    cap.release()
+                    cap = None
+                    time.sleep(15)
+                    continue
+            
+            # Grab a frame
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                consecutive_fails += 1
+                logger.warning(f"📹 RTSP Grabber: Frame capture failed ({consecutive_fails}/{MAX_FAILS_BEFORE_RECONNECT})")
+                if consecutive_fails >= MAX_FAILS_BEFORE_RECONNECT:
+                    logger.warning("📹 RTSP Grabber: Too many failures. Reconnecting...")
+                    cap.release()
+                    cap = None
+                    current_url = None
+                    consecutive_fails = 0
+                    time.sleep(5)
+                continue
+            
+            consecutive_fails = 0
+            
+            # Write frame as JPEG into /events/{camera_name}/
+            cam_folder = os.path.join(EVENTS_DIR, camera_name)
+            os.makedirs(cam_folder, exist_ok=True)
+            
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            frame_filename = f"rtsp_{camera_name}.{ts}.jpg"
+            frame_path = os.path.join(cam_folder, frame_filename)
+            
+            cv2.imwrite(frame_path, frame)
+            logger.info(f"📹 RTSP Grabber: Captured frame → {frame_filename}")
+            
+            time.sleep(interval)
+            
+        except Exception as e:
+            logger.error(f"📹 RTSP Grabber error: {e}")
+            if cap is not None:
+                cap.release()
+                cap = None
+                current_url = None
+            time.sleep(10)
+
+
 class EventFolderHandler(FileSystemEventHandler):
     def process_path(self, path):
         ext = path.lower().split('.')[-1]
@@ -715,6 +799,10 @@ def start_watcher():
     
     cleanup_thread = threading.Thread(target=check_storage_cleanup, daemon=True)
     cleanup_thread.start()
+    
+    # Start RTSP grabber thread
+    rtsp_thread = threading.Thread(target=rtsp_grabber, daemon=True)
+    rtsp_thread.start()
     
     event_handler = EventFolderHandler()
     observer = Observer()

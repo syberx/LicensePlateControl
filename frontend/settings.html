@@ -369,6 +369,8 @@
                     Assistant</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'mqtt'}" @click.prevent="tab = 'mqtt'">MQTT
                     Broker</a>
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'rtsp'}" @click.prevent="tab = 'rtsp'">RTSP
+                    Stream</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'storage'}"
                     @click.prevent="tab = 'storage'">Speicher / Bereinigung</a>
             </div>
@@ -474,6 +476,46 @@
                     </div>
                 </div>
 
+                <div x-show="tab === 'rtsp'" x-cloak>
+                    <div class="settings-card">
+                        <div class="toggle-wrap">
+                            <div>
+                                <h3>RTSP Livestream</h3>
+                                <p class="desc" style="margin-bottom: 0;">Analysiert periodisch Frames aus einem
+                                    RTSP-Kamerastream (z.B. Blue Iris). Kann parallel zum Snapshot-Modus laufen.</p>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="rtsp_enabled">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <form id="rtsp-form" onsubmit="return false;">
+                            <div class="form-group">
+                                <label class="form-label">RTSP Stream URL</label>
+                                <input type="text" id="rtsp_url" class="form-input"
+                                    placeholder="rtsp://user:pass@192.168.1.10:554/cam1">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Vollständige RTSP-URL
+                                    inkl. Zugangsdaten und Pfad.</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Analyse-Intervall (Sekunden)</label>
+                                <input type="number" id="rtsp_interval" class="form-input" placeholder="3" value="3"
+                                    min="1" max="60">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Wie oft ein Frame
+                                    analysiert werden soll. Empfohlen: 2–5 Sekunden.</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Kameraname</label>
+                                <input type="text" id="rtsp_camera_name" class="form-input" placeholder="einfahrt"
+                                    value="einfahrt">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Wird als Unterordner für
+                                    die Frames verwendet.</p>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
                 <button class="btn btn-primary" onclick="saveSettings()">Alle Einstellungen Speichern</button>
                 <div class="msg" id="form-msg"></div>
             </div>
@@ -526,6 +568,7 @@
             const keys = [
                 'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
+                'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_camera_name',
                 'cleanup_days_known', 'cleanup_days_unknown'
             ];
             let hasError = false;
