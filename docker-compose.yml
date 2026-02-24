@@ -52,6 +52,8 @@ services:
     volumes:
       - ./volumes/models:/models
       - ./volumes/events:/events
+    environment:
+      - HF_HOME=/models
     networks:
       - lpc-network
 
