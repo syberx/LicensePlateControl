@@ -27,7 +27,8 @@ try:
         if providers and "OpenVINOExecutionProvider" in providers:
             print(f"INFO: Intercepted ONNX Session Creation. Forcing Intel iGPU settings!")
             forced_options = {
-                'device_type': 'GPU_FP16'
+                'device_type': 'GPU',
+                'precision': 'FP16'
             }
             provider_opt_list = [forced_options] + [{}] * (len(providers) - 1)
             try:
