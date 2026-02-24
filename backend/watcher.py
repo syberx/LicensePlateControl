@@ -583,6 +583,17 @@ rtsp_status = {
     "backpressure": False,         # True if analysis takes longer than interval
 }
 
+# Used to group identical vehicles into a single event instead of repeating DB writes
+rtsp_active_session = {
+    "is_active": False,
+    "last_seen_time": 0.0,
+    "images": [],
+    "best_plate": "",
+    "best_conf": 0.0,
+    "best_match_score": 0.0,
+    "decision": "DENIED"
+}
+
 # Latest RTSP preview frame (JPEG bytes) — served via API
 rtsp_preview_frame = None
 
@@ -740,7 +751,7 @@ def rtsp_reader_thread():
 
 def rtsp_processor_thread():
     """Consumer Thread: Wakes up based on interval settings, grabs latest frame, analyzes it."""
-    global rtsp_status, rtsp_preview_frame, rtsp_latest_frame_data
+    global rtsp_status, rtsp_preview_frame, rtsp_latest_frame_data, rtsp_active_session
     import cv2
     capture_times = []
     last_frame_grabbed = 0
@@ -811,80 +822,140 @@ def rtsp_processor_thread():
             # Store in debug buffer
             _store_debug_frame(jpeg_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
 
+            # --- Intelligent Event Grouping Logic Starts Here ---
             is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
+            now_str = time.time()
 
+            # Handle detection
             if is_real_plate:
-                now_str = datetime.utcnow().timestamp()
+                matched_plate, match_score, decision = fuzzy_match_plate(plate)
                 
-                # Event Grouping / Cooldown
-                last_seen = rtsp_cooldown.get(plate, 0)
-                rtsp_cooldown[plate] = now_str
+                # If no active session, start one
+                if not rtsp_active_session["is_active"]:
+                    rtsp_active_session["is_active"] = True
+                    rtsp_active_session["last_seen_time"] = now_str
+                    rtsp_active_session["images"] = []
+                    rtsp_active_session["best_plate"] = plate
+                    rtsp_active_session["best_conf"] = confidence
+                    rtsp_active_session["best_match_score"] = match_score
+                    rtsp_active_session["decision"] = decision
+                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}'")
+                else:
+                    # Update active session timer
+                    rtsp_active_session["last_seen_time"] = now_str
+                    
+                    # Update 'best' if this frame is better
+                    if match_score > rtsp_active_session["best_match_score"] or (match_score == rtsp_active_session["best_match_score"] and confidence > rtsp_active_session["best_conf"]):
+                        rtsp_active_session["best_plate"] = plate
+                        rtsp_active_session["best_conf"] = confidence
+                        rtsp_active_session["best_match_score"] = match_score
+                        rtsp_active_session["decision"] = decision
+                        
+                # Add current frame to session gallery
+                rtsp_active_session["images"].append({
+                    "jpeg_bytes": jpeg_bytes,
+                    "plate": plate,
+                    "confidence": confidence,
+                    "proc_ms": proc_ms,
+                    "has_plate": True
+                })
                 
-                if now_str - last_seen < 30:
-                    logger.info(f"📹 RTSP: Plate '{plate}' ignored (Ongoing event: seen {int(now_str - last_seen)}s ago)")
-                    for p in list(rtsp_cooldown.keys()):
-                        if now_str - rtsp_cooldown[p] > 120:
-                            del rtsp_cooldown[p]
-                    continue
+                rtsp_status["state"] = "connected"
+                mode_label = f"alle {val}s" if mode == "seconds" else f"jeder {val}. Frame"
+                rtsp_status["message"] = f"Aktiv — Sammle Daten für: {rtsp_active_session['best_plate']} ({len(rtsp_active_session['images'])} Bilder) — {mode_label}"
                 
-                for p in list(rtsp_cooldown.keys()):
-                    if now_str - rtsp_cooldown[p] > 120:
-                        del rtsp_cooldown[p]
-
-                rtsp_status["detections"] += 1
-                rtsp_status["last_plate"] = plate
-                rtsp_status["last_confidence"] = round(confidence, 2)
-
+            else:
+                # No plate detected in this frame.
+                
+                # If we are in an active session, add empty frames up to a limit (so gallery shows the car leaving)
+                if rtsp_active_session["is_active"] and len(rtsp_active_session["images"]) < 10:
+                     rtsp_active_session["images"].append({
+                        "jpeg_bytes": jpeg_bytes,
+                        "plate": "UNKNOWN",
+                        "confidence": 0.0,
+                        "proc_ms": proc_ms,
+                        "has_plate": False
+                    })
+                
+                # Update status UI
                 mode_label = f"alle {val}s" if mode == "seconds" else f"jeder {val}. Frame"
                 rtsp_status["state"] = "connected"
-                rtsp_status["message"] = f"🚗 {plate} ({confidence:.0%}) — {rtsp_status['detections']} Erkennungen — {mode_label}"
-                logger.info(f"📹 RTSP: Plate detected: {plate} ({confidence:.0%}) — creating new event")
+                if rtsp_active_session["is_active"]:
+                    time_left = 20 - int(now_str - rtsp_active_session["last_seen_time"])
+                    rtsp_status["message"] = f"Aktiv — Auto verlässt Bild? (Abschluss in {time_left}s) — {mode_label}"
+                else:
+                    last_det = f" | Letzte: {rtsp_status['last_plate']}" if rtsp_status['last_plate'] else ""
+                    rtsp_status["message"] = f"Aktiv — kein Kennzeichen{last_det} — {mode_label}"
 
-                matched_plate, match_score, decision = fuzzy_match_plate(plate)
+            
+            # --- Session Finalization (Timeout check) ---
+            if rtsp_active_session["is_active"] and (now_str - rtsp_active_session["last_seen_time"] > 20):
+                # 20 seconds passed without detecting a plate -> finalize event
+                s_plate = rtsp_active_session["best_plate"]
+                s_conf = rtsp_active_session["best_conf"]
+                s_dec = rtsp_active_session["decision"]
+                s_imgs = rtsp_active_session["images"]
+                
+                # Re-do match just to be safe it's correct for the final selected plate
+                s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)
+                
+                logger.info(f"📹 RTSP: Finalizing session for '{s_plate}' after 20s timeout. {len(s_imgs)} frames collected.")
+                
+                rtsp_status["detections"] += 1
+                rtsp_status["last_plate"] = s_plate
+                rtsp_status["last_confidence"] = round(s_conf, 2)
+                
                 db = SessionLocal()
                 try:
                     event = models.Event(
                         timestamp=datetime.utcnow(),
-                        detected_plate=plate,
-                        confidence=f"{confidence:.4f}",
-                        decision=decision,
+                        detected_plate=s_plate,
+                        confidence=f"{s_conf:.4f}",
+                        decision=s_dec_final,
                         series_id=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
-                        image_count=1,
-                        matched_plate=matched_plate,
-                        match_score=match_score,
-                        processing_time_ms=proc_ms
+                        image_count=len(s_imgs),
+                        matched_plate=s_matched_plate,
+                        match_score=s_match_score,
+                        processing_time_ms=None  # Aggregate, left blank
                     )
                     db.add(event)
                     db.flush()
 
-                    event_image = models.EventImage(
-                        event_id=event.id,
-                        filename=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%H%M%S')}.jpg",
-                        image_data=jpeg_bytes,
-                        detected_plate=plate,
-                        confidence=confidence,
-                        has_plate=True,
-                        is_trigger=True
-                    )
-                    db.add(event_image)
+                    for i, img_data in enumerate(s_imgs):
+                        event_image = models.EventImage(
+                            event_id=event.id,
+                            filename=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%H%M%S')}_{i}.jpg",
+                            image_data=img_data["jpeg_bytes"],
+                            detected_plate=img_data["plate"],
+                            confidence=img_data["confidence"],
+                            has_plate=img_data["has_plate"],
+                            is_trigger=(i == 0) # Just mark the first one as trigger for the star icon
+                        )
+                        db.add(event_image)
+                    
                     db.commit()
+                    logger.info(f"📹 RTSP: Consolidated Event #{event.id} created successfully!")
 
-                    logger.info(f"📹 RTSP: Event #{event.id} created for {plate}")
-                    if decision == "ALLOWED":
-                        trigger_ha(plate)
-                        trigger_mqtt(plate)
+                    if s_dec_final == "ALLOWED":
+                        trigger_ha(s_plate)
+                        trigger_mqtt(s_plate)
 
                 except Exception as e:
                     db.rollback()
-                    logger.error(f"📹 RTSP: DB error: {e}")
+                    logger.error(f"📹 RTSP: DB error during session finalization: {e}")
                 finally:
                     db.close()
-
-            else:
-                mode_label = f"alle {val}s" if mode == "seconds" else f"jeder {val}. Frame"
-                rtsp_status["state"] = "connected"
-                last_det = f" | Letzte: {rtsp_status['last_plate']}" if rtsp_status['last_plate'] else ""
-                rtsp_status["message"] = f"Aktiv — kein Kennzeichen{last_det} — {mode_label}"
+                
+                # Reset session
+                rtsp_active_session = {
+                    "is_active": False,
+                    "last_seen_time": 0.0,
+                    "images": [],
+                    "best_plate": "",
+                    "best_conf": 0.0,
+                    "best_match_score": 0.0,
+                    "decision": "DENIED"
+                }
 
             if mode == "seconds" and analysis_duration > val:
                 rtsp_status["backpressure"] = True
