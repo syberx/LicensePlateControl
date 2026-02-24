@@ -404,21 +404,37 @@ def process_followup_images(folder_path: str):
     if not new_images:
         return
     
+    # We only process up to 10 images to save ML resources
+    # Images beyond this limit must be deleted to prevent the folder from filling up
+    image_files = sorted(new_images, key=os.path.getmtime, reverse=True)
+    process_list = image_files[:10]
+    ignore_list = image_files[10:]
+    
     for img in new_images:
         processed_files.add(img)
+        
+    for img in ignore_list:
+        try:
+            os.remove(img)
+            logger.info(f"Deleted overflow processed image: {os.path.basename(img)}")
+        except OSError:
+            pass
     
-    image_files = sorted(new_images, key=os.path.getmtime, reverse=True)[:10]
-    logger.info(f"📸 Follow-up: Processing {len(image_files)} images for series")
+    logger.info(f"📸 Follow-up: Processing {len(process_list)} images for series")
     
     with series_lock:
         series = active_series.get(folder_path)
     
     if not series or not series.get("event_id"):
         # No active series — treat as new first image
-        if image_files:
-            process_first_image(folder_path, image_files[0])
-            for img in image_files[1:]:
-                processed_files.add(img)
+        if process_list:
+            process_first_image(folder_path, process_list[0])
+            for img in process_list[1:]:
+                try:
+                    os.remove(img)
+                    logger.info(f"Deleted unassigned image: {os.path.basename(img)}")
+                except OSError:
+                    pass
         return
     
     # Process each image and find best result
@@ -427,7 +443,7 @@ def process_followup_images(folder_path: str):
     
     # Store per-image results for DB insertion
     image_results = []
-    for img_path in image_files:
+    for img_path in process_list:
         result = process_single_image(img_path)
         plate = result["plate"]
         conf = result["confidence"]
