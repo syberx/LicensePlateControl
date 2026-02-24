@@ -520,6 +520,7 @@ rtsp_status = {
     "frames_grabbed": 0,           # Total frames read from stream
     "frames_analyzed": 0,          # Frames sent to engine
     "detections": 0,               # Frames where a real plate was found
+    "frames_skipped": 0,           # Frames skipped (frame mode)
     "last_capture": None,          # ISO timestamp of last analysis
     "last_plate": None,            # Last detected plate text
     "last_confidence": None,       # Last detection confidence
@@ -529,6 +530,7 @@ rtsp_status = {
     "camera_name": "",
     "interval_mode": "seconds",
     "interval_value": 3,
+    "backpressure": False,         # True if analysis takes longer than interval
 }
 
 # Latest RTSP preview frame (JPEG bytes) — served via API
@@ -647,8 +649,9 @@ def rtsp_grabber():
             # --- Interval Logic ---
             if interval_mode == "frames":
                 if frame_counter % max(interval_value, 1) != 0:
+                    rtsp_status["frames_skipped"] += 1
                     continue  # Skip this frame
-            # else: seconds mode — we sleep at the bottom
+            # else: seconds mode — adaptive sleep at the bottom
 
             # --- Encode frame to JPEG in memory ---
             success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -670,8 +673,10 @@ def rtsp_grabber():
                 elapsed = capture_times[-1] - capture_times[0]
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
-            # --- Send to Engine API for analysis ---
+            # --- Send to Engine API for analysis (timed) ---
+            analysis_start = time.time()
             result = _analyze_frame_bytes(jpeg_bytes, f"rtsp_{camera_name}.jpg")
+            analysis_duration = time.time() - analysis_start
 
             plate = result.get("plate", "")
             confidence = result.get("confidence", 0.0)
@@ -743,9 +748,15 @@ def rtsp_grabber():
                 last_det = f" | Letzte: {rtsp_status['last_plate']}" if rtsp_status['last_plate'] else ""
                 rtsp_status["message"] = f"Aktiv — kein Kennzeichen{last_det} — {mode_label}"
 
-            # Sleep only in seconds mode
+            # Adaptive sleep: subtract analysis time to maintain target interval
             if interval_mode == "seconds":
-                time.sleep(interval_value)
+                remaining_sleep = max(0, interval_value - analysis_duration)
+                if analysis_duration > interval_value:
+                    rtsp_status["backpressure"] = True
+                    logger.warning(f"📹 RTSP: Backpressure! Analysis took {analysis_duration:.1f}s but interval is {interval_value}s")
+                else:
+                    rtsp_status["backpressure"] = False
+                time.sleep(remaining_sleep)
 
         except Exception as e:
             logger.error(f"📹 RTSP error: {e}")

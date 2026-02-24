@@ -535,12 +535,19 @@
                             <p style="font-size: 0.8rem; color: rgba(255,255,255,0.6); margin-bottom: 0.75rem;"
                                 x-text="status.message"></p>
 
-                            <!-- Preview Image -->
-                            <div x-show="status.state === 'connected'" style="margin-bottom: 0.75rem;">
-                                <img :src="'/api/rtsp/preview?' + Date.now()"
+                            <!-- Preview Image (refreshes every poll tick) -->
+                            <div x-show="status.state === 'connected' || status.state === 'connecting'"
+                                style="margin-bottom: 0.75rem;">
+                                <img :src="'/api/rtsp/preview?t=' + pollTick"
                                     style="width:100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); max-height: 220px; object-fit: cover;"
-                                    alt="RTSP Preview" onerror="this.style.display='none'"
+                                    alt="RTSP Vorschau" onerror="this.style.display='none'"
                                     onload="this.style.display='block'">
+                            </div>
+
+                            <!-- Backpressure Warning -->
+                            <div x-show="status.backpressure"
+                                style="margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 6px; font-size: 0.75rem; color: #fbbf24;">
+                                ⚠️ Backpressure: Analyse dauert länger als das Intervall. Erhöhe den Intervall-Wert!
                             </div>
 
                             <!-- Stats Grid -->
@@ -679,15 +686,34 @@
                 status: {
                     state: 'disabled',
                     message: 'Lade Status...',
-                    frames_captured: 0,
+                    frames_analyzed: 0,
+                    detections: 0,
                     fps: 0,
-                    last_capture: null
+                    last_capture: null,
+                    last_plate: null,
+                    last_confidence: null,
+                    last_processing_ms: null,
+                    backpressure: false
                 },
+                pollTick: 0,
                 _interval: null,
 
                 startPolling() {
                     this.fetchStatus();
-                    this._interval = setInterval(() => this.fetchStatus(), 3000);
+                    this._interval = setInterval(() => {
+                        this.pollTick++;
+                        this.fetchStatus();
+                    }, 3000);
+
+                    // Auto-save when RTSP toggle changes
+                    this.$nextTick(() => {
+                        const toggle = document.getElementById('rtsp_enabled');
+                        if (toggle) {
+                            toggle.addEventListener('change', () => {
+                                saveSettings();
+                            });
+                        }
+                    });
                 },
 
                 async fetchStatus() {
@@ -698,6 +724,7 @@
                 },
 
                 statusColor() {
+                    if (this.status.backpressure) return '#fbbf24';
                     if (this.status.state === 'connected') return '#34d399';
                     if (this.status.state === 'connecting') return '#fbbf24';
                     if (this.status.state === 'error') return '#f87171';
