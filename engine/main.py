@@ -26,11 +26,10 @@ try:
         session = None
         if providers and "OpenVINOExecutionProvider" in providers:
             print(f"INFO: Intercepted ONNX Session Creation. Forcing Intel iGPU settings!")
-            forced_options = [{
-                'device_type': 'GPU',
-                'precision': 'FP16'
-            }]
-            provider_opt_list = forced_options + [None] * (len(providers) - 1)
+            forced_options = {
+                'device_type': 'GPU_FP16'
+            }
+            provider_opt_list = [forced_options] + [{}] * (len(providers) - 1)
             try:
                 session = original_InferenceSession(path_or_bytes, sess_options, providers, provider_options=provider_opt_list, **kwargs)
             except Exception as e:
