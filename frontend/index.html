@@ -686,12 +686,10 @@
                                         <template x-if="e.ha_triggered || e.mqtt_triggered">
                                             <span>
                                                 <span style="color:#60a5fa;">✓ Ausgelöst</span>
-                                                <template x-if="e.trigger_timestamp">
-                                                    <span
-                                                        style="color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-left: 4px;">
-                                                        (<span x-text="formatDate(e.trigger_timestamp)"></span>)
-                                                    </span>
-                                                </template>
+                                                <span x-show="e.trigger_timestamp"
+                                                    style="color: rgba(255,255,255,0.5); font-size: 0.85rem; margin-left: 4px;">
+                                                    (<span x-text="formatDate(e.trigger_timestamp)"></span>)
+                                                </span>
                                             </span>
                                         </template>
                                         <template x-if="!e.ha_triggered && !e.mqtt_triggered">

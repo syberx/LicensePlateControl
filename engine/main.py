@@ -18,19 +18,36 @@ try:
     original_InferenceSession = ort.InferenceSession
 
     def patched_InferenceSession(path_or_bytes, sess_options=None, providers=None, provider_options=None, **kwargs):
+        print(f"\n--- ONNX Session Initialization ---")
+        print(f"Model: {path_or_bytes}")
+        print(f"Available Providers: {ort.get_available_providers()}")
+        print(f"Requested Providers: {providers}")
+        
+        session = None
         if providers and "OpenVINOExecutionProvider" in providers:
-            print(f"INFO: Intercepted ONNX Session Creation for {path_or_bytes}. Forcing Intel iGPU settings!")
-            # OpenVINO specific options to target Intel GPU (iHD/i965)
-            # If the user has an Intel CPU with integrated graphics, this offloads the heavy YOLOv9 network.
+            print(f"INFO: Intercepted ONNX Session Creation. Forcing Intel iGPU settings!")
             forced_options = [{
                 'device_type': 'GPU',
                 'precision': 'FP16'
             }]
-            # Pad the rest of the providers with empty options if there are multiple providers
             provider_opt_list = forced_options + [None] * (len(providers) - 1)
-            return original_InferenceSession(path_or_bytes, sess_options, providers, provider_options=provider_opt_list, **kwargs)
+            try:
+                session = original_InferenceSession(path_or_bytes, sess_options, providers, provider_options=provider_opt_list, **kwargs)
+            except Exception as e:
+                print(f"WARNING: OpenVINO GPU Init Failed: {e}. Falling back to default settings.")
+                pass
+                
+        if session is None:
+             session = original_InferenceSession(path_or_bytes, sess_options, providers, provider_options, **kwargs)
+             
+        # Extract the actual providers the session ended up using
+        actual_providers = session.get_providers()
+        print(f"SUCCESS: Session created! Active Providers: {actual_providers}")
+        if "CPUExecutionProvider" in actual_providers and "OpenVINOExecutionProvider" not in actual_providers:
+            print("WARNING: Model is running entirely on CPU! OpenVINO fallback occurred.")
+        print(f"-----------------------------------\n")
         
-        return original_InferenceSession(path_or_bytes, sess_options, providers, provider_options, **kwargs)
+        return session
 
     ort.InferenceSession = patched_InferenceSession
     # ---------------------------------------------------------
