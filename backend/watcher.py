@@ -310,7 +310,8 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
             detected_plate=plate if has_plate else None,
             confidence=conf if has_plate else None,
             has_plate=has_plate,
-            is_trigger=is_trigger
+            is_trigger=is_trigger,
+            processing_time_ms=result.get("processing_time_ms")
         )
         db.add(event_image)
         db.flush()
@@ -959,7 +960,7 @@ def rtsp_processor_thread():
                         image_count=len(s_imgs),
                         matched_plate=s_matched_plate,
                         match_score=s_match_score,
-                        processing_time_ms=None  # Aggregate, left blank
+                        processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None
                     )
                     db.add(event)
                     db.flush()
@@ -972,7 +973,8 @@ def rtsp_processor_thread():
                             detected_plate=img_data["plate"],
                             confidence=img_data["confidence"],
                             has_plate=img_data["has_plate"],
-                            is_trigger=(i == 0) # Just mark the first one as trigger for the star icon
+                            is_trigger=(i == 0), # Just mark the first one as trigger for the star icon
+                            processing_time_ms=img_data["proc_ms"]
                         )
                         db.add(event_image)
                     

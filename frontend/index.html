@@ -447,6 +447,18 @@
             letter-spacing: 0.5px;
         }
 
+        .thumb-time-label {
+            position: absolute;
+            top: 0;
+            right: 0;
+            padding: 2px 4px;
+            background: rgba(0, 0, 0, 0.6);
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.55rem;
+            font-family: monospace;
+            border-bottom-left-radius: 4px;
+        }
+
         /* Trigger star indicator */
         .trigger-star {
             position: absolute;
@@ -723,6 +735,10 @@
                                             </template>
                                             <template x-if="img.has_plate && img.detected_plate">
                                                 <div class="thumb-plate-label" x-text="img.detected_plate"></div>
+                                            </template>
+                                            <template x-if="img.processing_time_ms">
+                                                <div class="thumb-time-label"
+                                                    x-text="Number(img.processing_time_ms).toFixed(0) + ' ms'"></div>
                                             </template>
                                         </div>
                                     </template>

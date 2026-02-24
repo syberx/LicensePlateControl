@@ -49,6 +49,7 @@ class EventImageResponse(BaseModel):
     has_plate: bool = False
     is_trigger: bool = False
     created_at: Optional[datetime.datetime] = None
+    processing_time_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 

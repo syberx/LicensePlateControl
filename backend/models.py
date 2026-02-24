@@ -44,6 +44,7 @@ class EventImage(Base):
     has_plate = Column(Boolean, default=False)
     is_trigger = Column(Boolean, default=False)  # First plate detection that triggered HA
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    processing_time_ms = Column(Float, nullable=True)
 
     event = relationship("Event", back_populates="images")
 
