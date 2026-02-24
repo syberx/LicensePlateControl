@@ -172,6 +172,20 @@ last_ha_trigger = {}  # {plate_text: timestamp}
 last_mqtt_trigger = {} # {plate_text: timestamp}
 
 
+def safe_delete_file(file_path: str, max_retries: int = 5, delay: float = 0.5) -> bool:
+    """Attempt to delete a file multiple times in case it's temporarily locked by another process (e.g. FTP)."""
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return True
+        except OSError as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                logger.warning(f"Could not delete {file_path} after {max_retries} attempts: {e}")
+    return False
+
 def process_single_image(img_path: str) -> dict:
     """Send a single image to the engine and return the best plate result."""
     # Wait for the file to finish writing (e.g. from FTP or Blue Iris)
@@ -316,12 +330,9 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
         db.add(event_image)
         db.flush()
         
-        # Delete the source file
-        try:
-            os.remove(img_path)
+        # Delete the source file safely
+        if safe_delete_file(img_path):
             logger.info(f"Deleted processed image: {os.path.basename(img_path)}")
-        except OSError as e:
-            logger.warning(f"Could not delete {img_path}: {e}")
         
         return event_image
     except Exception as e:
@@ -431,11 +442,8 @@ def process_followup_images(folder_path: str):
         processed_files.add(img)
         
     for img in ignore_list:
-        try:
-            os.remove(img)
+        if safe_delete_file(img):
             logger.info(f"Deleted overflow processed image: {os.path.basename(img)}")
-        except OSError:
-            pass
     
     logger.info(f"📸 Follow-up: Processing {len(process_list)} images for series")
     
@@ -447,11 +455,8 @@ def process_followup_images(folder_path: str):
         if process_list:
             process_first_image(folder_path, process_list[0])
             for img in process_list[1:]:
-                try:
-                    os.remove(img)
+                if safe_delete_file(img):
                     logger.info(f"Deleted unassigned image: {os.path.basename(img)}")
-                except OSError:
-                    pass
         return
     
     # Process each image and find best result
