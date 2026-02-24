@@ -221,3 +221,19 @@ def get_rtsp_preview():
     if rtsp_preview_frame is None:
         raise HTTPException(status_code=404, detail="No preview available")
     return Response(content=rtsp_preview_frame, media_type="image/jpeg")
+
+# --- System Logs ---
+
+@router.get("/api/logs")
+def get_logs(level: str = None, source: str = None, limit: int = 200):
+    """Return recent system log entries from the in-memory ring buffer."""
+    from watcher import log_handler
+    return log_handler.get_entries(level=level, source=source, limit=limit)
+
+@router.delete("/api/logs")
+def clear_logs():
+    """Clear the in-memory log buffer."""
+    from watcher import log_handler
+    with log_handler.lock:
+        log_handler.entries.clear()
+    return {"status": "ok", "message": "Logs cleared"}

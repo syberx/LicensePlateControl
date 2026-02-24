@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LicensePlateControl — System Log</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        [x-cloak] {
+            display: none !important;
+        }
+
+        .nav {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 0 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-brand span {
+            color: #818cf8;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .nav-link {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-link.active {
+            background: rgba(129, 140, 248, 0.2);
+            color: #818cf8;
+        }
+
+        .nav-link:not(.active) {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .toolbar select,
+        .toolbar input {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #e0e0e0;
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .toolbar select:focus,
+        .toolbar input:focus {
+            border-color: #818cf8;
+        }
+
+        .btn-sm {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .btn-refresh {
+            background: rgba(129, 140, 248, 0.15);
+            color: #818cf8;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(129, 140, 248, 0.3);
+        }
+
+        .btn-clear {
+            background: rgba(248, 113, 113, 0.12);
+            color: #f87171;
+        }
+
+        .btn-clear:hover {
+            background: rgba(248, 113, 113, 0.25);
+        }
+
+        .btn-auto {
+            background: rgba(52, 211, 153, 0.12);
+            color: #34d399;
+        }
+
+        .btn-auto.active {
+            background: rgba(52, 211, 153, 0.3);
+            box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.4);
+        }
+
+        .log-count {
+            margin-left: auto;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .log-table th {
+            text-align: left;
+            padding: 0.75rem 1rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: rgba(255, 255, 255, 0.35);
+            background: rgba(255, 255, 255, 0.04);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .log-table td {
+            padding: 0.5rem 1rem;
+            font-size: 0.78rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            vertical-align: top;
+        }
+
+        .log-table tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .log-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .col-time {
+            width: 140px;
+            color: rgba(255, 255, 255, 0.4);
+            font-variant-numeric: tabular-nums;
+            font-size: 0.72rem;
+        }
+
+        .col-level {
+            width: 80px;
+        }
+
+        .col-source {
+            width: 130px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.72rem;
+        }
+
+        .col-msg {
+            font-family: 'Inter', monospace;
+            word-break: break-word;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-info {
+            background: rgba(96, 165, 250, 0.15);
+            color: #60a5fa;
+        }
+
+        .badge-warning {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+
+        .badge-error {
+            background: rgba(248, 113, 113, 0.15);
+            color: #f87171;
+        }
+
+        .badge-debug {
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: rgba(255, 255, 255, 0.3);
+            font-size: 0.9rem;
+        }
+
+        .api-key-input {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #e0e0e0;
+            padding: 0.5rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            width: 200px;
+            font-family: inherit;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="nav">
+        <div class="nav-brand">License<span>Plate</span>Control</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link">Dashboard</a>
+            <a href="/plates.html" class="nav-link">Kennzeichen</a>
+            <a href="/logs.html" class="nav-link active">Log</a>
+            <a href="/settings.html" class="nav-link">Einstellungen</a>
+        </div>
+        <div class="nav-right">
+            <input type="password" id="api-key" class="api-key-input" placeholder="API Key eingeben">
+        </div>
+    </nav>
+
+    <div class="container" x-data="logViewer()" x-init="init()">
+        <h1>📋 System Log</h1>
+
+        <div class="toolbar">
+            <select x-model="filterLevel" @change="fetchLogs()">
+                <option value="">Alle Level</option>
+                <option value="INFO">ℹ️ INFO</option>
+                <option value="WARNING">⚠️ WARNING</option>
+                <option value="ERROR">❌ ERROR</option>
+            </select>
+
+            <input type="text" x-model="filterSource" placeholder="🔍 Suche (z.B. RTSP, watcher...)"
+                @input.debounce.400ms="fetchLogs()" style="width: 250px;">
+
+            <button class="btn-sm btn-auto" :class="{ active: autoRefresh }" @click="toggleAutoRefresh()">
+                🔄 Auto (<span x-text="autoRefresh ? 'AN' : 'AUS'"></span>)
+            </button>
+
+            <button class="btn-sm btn-refresh" @click="fetchLogs()">↻ Aktualisieren</button>
+
+            <button class="btn-sm btn-clear" @click="clearLogs()">🗑️ Leeren</button>
+
+            <div class="log-count" x-text="entries.length + ' Einträge'"></div>
+        </div>
+
+        <template x-if="entries.length === 0">
+            <div class="empty-state">
+                <p>Keine Log-Einträge vorhanden.</p>
+                <p style="font-size: 0.75rem; margin-top: 0.5rem;">Logs werden beim Start des Backends automatisch
+                    gesammelt.</p>
+            </div>
+        </template>
+
+        <template x-if="entries.length > 0">
+            <table class="log-table">
+                <thead>
+                    <tr>
+                        <th>Zeit</th>
+                        <th>Level</th>
+                        <th>Quelle</th>
+                        <th>Nachricht</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="entry in entries" :key="entry.timestamp + entry.message">
+                        <tr>
+                            <td class="col-time" x-text="formatTime(entry.timestamp)"></td>
+                            <td class="col-level">
+                                <span class="badge"
+                                    :class="entry.level === 'ERROR' ? 'badge-error' : entry.level === 'WARNING' ? 'badge-warning' : entry.level === 'INFO' ? 'badge-info' : 'badge-debug'"
+                                    x-text="entry.level"></span>
+                            </td>
+                            <td class="col-source" x-text="entry.source"></td>
+                            <td class="col-msg" x-text="entry.message"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </template>
+    </div>
+
+    <script>
+        const API_BASE = '';
+
+        function logViewer() {
+            return {
+                entries: [],
+                filterLevel: '',
+                filterSource: '',
+                autoRefresh: true,
+                _interval: null,
+
+                init() {
+                    this.fetchLogs();
+                    this._interval = setInterval(() => {
+                        if (this.autoRefresh) this.fetchLogs();
+                    }, 5000);
+                },
+
+                async fetchLogs() {
+                    try {
+                        let url = `${API_BASE}/api/logs?limit=300`;
+                        if (this.filterLevel) url += `&level=${this.filterLevel}`;
+                        if (this.filterSource) url += `&source=${encodeURIComponent(this.filterSource)}`;
+                        const res = await fetch(url);
+                        if (res.ok) this.entries = await res.json();
+                    } catch (e) { console.error('Log fetch error', e); }
+                },
+
+                async clearLogs() {
+                    if (!confirm('Alle Logs löschen?')) return;
+                    try {
+                        await fetch(`${API_BASE}/api/logs`, { method: 'DELETE' });
+                        this.entries = [];
+                    } catch (e) { console.error('Log clear error', e); }
+                },
+
+                toggleAutoRefresh() {
+                    this.autoRefresh = !this.autoRefresh;
+                },
+
+                formatTime(isoStr) {
+                    if (!isoStr) return '';
+                    const d = new Date(isoStr + 'Z');
+                    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' '
+                        + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                }
+            };
+        }
+    </script>
+</body>
+
+</html>

@@ -3,6 +3,7 @@ import os
 import glob
 import threading
 from datetime import datetime, timedelta
+from collections import deque
 import requests
 import re
 import uuid
@@ -16,6 +17,54 @@ import paho.mqtt.client as mqtt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- In-Memory Ring Buffer Log Handler ---
+
+class MemoryLogHandler(logging.Handler):
+    """Captures log entries in a ring buffer for the /api/logs endpoint.
+    Uses deque (thread-safe for append/iteration) without extra locks
+    to avoid deadlocks with uvicorn's internal logging."""
+    MAX_ENTRIES = 500
+
+    # Noisy loggers to exclude from the buffer
+    _EXCLUDE_LOGGERS = {"uvicorn.access"}
+
+    def __init__(self):
+        super().__init__()
+        self.entries = deque(maxlen=self.MAX_ENTRIES)
+
+    def emit(self, record):
+        if record.name in self._EXCLUDE_LOGGERS:
+            return
+        try:
+            entry = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "level": record.levelname,
+                "source": record.name,
+                "message": self.format(record),
+            }
+            self.entries.append(entry)
+        except Exception:
+            pass  # Never let log handler crash the app
+
+    def get_entries(self, level=None, source=None, limit=200):
+        items = list(self.entries)
+        if level:
+            items = [e for e in items if e["level"] == level.upper()]
+        if source:
+            items = [e for e in items if source.lower() in e["source"].lower() or source.lower() in e["message"].lower()]
+        items.reverse()
+        return items[:limit]
+
+# Global log handler instance
+log_handler = MemoryLogHandler()
+log_handler.setLevel(logging.INFO)
+log_handler.setFormatter(logging.Formatter("%(message)s"))
+
+# Attach to root logger so ALL logs are captured
+logging.getLogger().addHandler(log_handler)
+
+
 
 EVENTS_DIR = "/events"
 ENGINE_URL = os.getenv("ENGINE_URL", "http://engine:8000")
