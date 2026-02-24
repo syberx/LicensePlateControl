@@ -1,0 +1,12 @@
+Number of platforms                               0
+
+ICD loader properties
+  ICD loader Name                                 OpenCL ICD Loader
+  ICD loader Vendor                               OCL Icd free software
+  ICD loader Version                              2.3.3
+  ICD loader Profile                              OpenCL 3.0
+total 0
+drwxr-xr-x 2 root root        80 Feb 24 14:34 .
+drwxr-xr-x 6 root root       360 Feb 24 14:34 ..
+crw-rw---- 1 root video 226,   0 Feb 24 14:34 card0
+crw-rw---- 1 root   110 226, 128 Feb 24 14:34 renderD128

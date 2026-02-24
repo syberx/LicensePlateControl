@@ -837,6 +837,37 @@ def rtsp_processor_thread():
                 continue
 
             # --- Analysis starts here ---
+            # ROI Masking (Mask out background)
+            db = SessionLocal()
+            try:
+                polygon_str = get_setting(db, "rtsp_roi_polygon", "")
+            except Exception:
+                polygon_str = ""
+            finally:
+                db.close()
+                
+            if polygon_str:
+                try:
+                    import json
+                    points = json.loads(polygon_str)
+                    if len(points) >= 3:
+                        h, w = frame.shape[:2]
+                        # Convert relative coordinates (0.0 to 1.0) to absolute pixels
+                        poly_pts = np.array([
+                            [int(p["x"] * w), int(p["y"] * h)] 
+                            for p in points
+                        ], np.int32)
+                        poly_pts = poly_pts.reshape((-1, 1, 2))
+                        
+                        # Create black mask and draw white polygon
+                        mask = np.zeros((h, w), dtype=np.uint8)
+                        cv2.fillPoly(mask, [poly_pts], 255)
+                        
+                        # Apply mask to original frame
+                        frame = cv2.bitwise_and(frame, frame, mask=mask)
+                except Exception as e:
+                    logger.error(f"Failed to apply ROI mask: {e}")
+
             success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success:
                 continue

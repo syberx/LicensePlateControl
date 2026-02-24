@@ -1,0 +1,148 @@
+
+--- ONNX Session Initialization ---
+Model: /root/.cache/open-image-models/yolo-v9-t-640-license-plate-end2end/yolo-v9-t-640-license-plates-end2end.onnx
+Available Providers: ['OpenVINOExecutionProvider', 'CPUExecutionProvider']
+Requested Providers: ['OpenVINOExecutionProvider', 'CPUExecutionProvider']
+INFO: Intercepted ONNX Session Creation. Forcing Intel iGPU settings!
+SUCCESS: Session created! Active Providers: ['CPUExecutionProvider']
+WARNING: Model is running entirely on CPU! OpenVINO fallback occurred.
+-----------------------------------
+
+2026-02-24 14:34:55.593634861 [W:onnxruntime:Default, device_discovery.cc:164 DiscoverDevicesForPlatform] GPU device discovery failed: device_discovery.cc:89 ReadFileContents Failed to open file: "/sys/class/drm/card0/device/vendor"
+
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:   0%|          | 0/7835770 [00:00<?, ?it/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:   3%|ÔûÄ         | 192k/7.47M [00:00<00:03, 1.95MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:   8%|Ôûè         | 576k/7.47M [00:00<00:02, 2.90MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  18%|ÔûêÔûè        | 1.38M/7.47M [00:00<00:01, 5.22MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  28%|ÔûêÔûêÔûè       | 2.06M/7.47M [00:00<00:00, 5.95MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  36%|ÔûêÔûêÔûêÔûî      | 2.69M/7.47M [00:00<00:00, 6.16MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  45%|ÔûêÔûêÔûêÔûêÔûî     | 3.38M/7.47M [00:00<00:00, 6.51MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  54%|ÔûêÔûêÔûêÔûêÔûêÔûÄ    | 4.00M/7.47M [00:00<00:00, 6.50MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  62%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûÅ   | 4.62M/7.47M [00:00<00:00, 6.49MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  71%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûê   | 5.31M/7.47M [00:00<00:00, 6.53MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  80%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûê  | 6.00M/7.47M [00:01<00:00, 6.61MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  89%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûë | 6.69M/7.47M [00:01<00:00, 6.56MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx:  99%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûè| 7.38M/7.47M [00:01<00:00, 6.62MB/s]
+Downloading yolo-v9-t-640-license-plates-end2end.onnx: 100%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûê| 7.47M/7.47M [00:01<00:00, 6.17MB/s]
+2026-02-24 14:34:57.683954843 [E:onnxruntime:Default, provider_bridge_ort.cc:2197 Create] /onnxruntime/onnxruntime/core/providers/openvino/openvino_provider_factory.cc:139 std::string onnxruntime::openvino_ep::ParseDeviceType(std::shared_ptr<OVCore>, const onnxruntime::ProviderOptions&) [ERROR] [OpenVINO] Device GPU is not available
+
+
+2026-02-24 14:34:57.683990365 [W:onnxruntime:Default, onnxruntime_pybind_state.cc:1106 CreateExecutionProviderFactoryInstance] Failed to create OpenVINOExecutionProvider. Please refer https://onnxruntime.ai/docs/execution-providers/OpenVINO-ExecutionProvider.html#requirements to ensure all dependencies are met.
+INFO:open_image_models.detection.core.yolo_v9.inference:Using ONNX Runtime with ['OpenVINOExecutionProvider', 'CPUExecutionProvider'] provider(s)
+INFO:open_image_models.detection.pipeline.license_plate:Initialized LicensePlateDetector with model /root/.cache/open-image-models/yolo-v9-t-640-license-plate-end2end/yolo-v9-t-640-license-plates-end2end.onnx
+
+Downloading cct_s_v1_global.onnx:   0%|          | 0/7623453 [00:00<?, ?it/s]
+Downloading cct_s_v1_global.onnx:   1%|          | 64.0k/7.27M [00:00<00:13, 543kB/s]
+Downloading cct_s_v1_global.onnx:   3%|ÔûÄ         | 256k/7.27M [00:00<00:06, 1.12MB/s]
+Downloading cct_s_v1_global.onnx:   6%|Ôûî         | 448k/7.27M [00:00<00:04, 1.44MB/s]
+Downloading cct_s_v1_global.onnx:   9%|Ôûè         | 640k/7.27M [00:00<00:04, 1.63MB/s]
+Downloading cct_s_v1_global.onnx:  12%|ÔûêÔûÅ        | 896k/7.27M [00:00<00:03, 1.89MB/s]
+Downloading cct_s_v1_global.onnx:  16%|ÔûêÔûï        | 1.19M/7.27M [00:00<00:02, 2.20MB/s]
+Downloading cct_s_v1_global.onnx:  21%|ÔûêÔûê        | 1.50M/7.27M [00:00<00:02, 2.44MB/s]
+Downloading cct_s_v1_global.onnx:  26%|ÔûêÔûêÔûî       | 1.88M/7.27M [00:00<00:02, 2.75MB/s]
+Downloading cct_s_v1_global.onnx:  32%|ÔûêÔûêÔûêÔûÅ      | 2.31M/7.27M [00:01<00:01, 3.13MB/s]
+Downloading cct_s_v1_global.onnx:  38%|ÔûêÔûêÔûêÔûè      | 2.75M/7.27M [00:01<00:01, 3.50MB/s]
+Downloading cct_s_v1_global.onnx:  45%|ÔûêÔûêÔûêÔûêÔûì     | 3.25M/7.27M [00:01<00:01, 3.98MB/s]
+Downloading cct_s_v1_global.onnx:  52%|ÔûêÔûêÔûêÔûêÔûêÔûÅ    | 3.81M/7.27M [00:01<00:00, 4.32MB/s]
+Downloading cct_s_v1_global.onnx:  61%|ÔûêÔûêÔûêÔûêÔûêÔûê    | 4.44M/7.27M [00:01<00:00, 4.89MB/s]
+Downloading cct_s_v1_global.onnx:  70%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûë   | 5.06M/7.27M [00:01<00:00, 5.28MB/s]
+Downloading cct_s_v1_global.onnx:  78%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûè  | 5.69M/7.27M [00:01<00:00, 5.51MB/s]
+Downloading cct_s_v1_global.onnx:  87%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûï | 6.31M/7.27M [00:01<00:00, 5.70MB/s]
+Downloading cct_s_v1_global.onnx:  96%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûï| 7.00M/7.27M [00:01<00:00, 5.92MB/s]
+Downloading cct_s_v1_global.onnx: 100%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûê| 7.27M/7.27M [00:01<00:00, 3.95MB/s]
+
+Downloading cct_s_v1_global_plate_config.yaml:   0%|          | 0/773 [00:00<?, ?it/s]
+Downloading cct_s_v1_global_plate_config.yaml: 100%|ÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûêÔûê| 773/773 [00:00<00:00, 1.28MB/s]
+2026-02-24 14:35:01.108811694 [E:onnxruntime:Default, provider_bridge_ort.cc:2197 Create] /onnxruntime/onnxruntime/core/providers/openvino/openvino_provider_factory.cc:139 std::string onnxruntime::openvino_ep::ParseDeviceType(std::shared_ptr<OVCore>, const onnxruntime::ProviderOptions&) [ERROR] [OpenVINO] Device GPU is not available
+
+2026-02-24 14:35:01.108839417 [W:onnxruntime:Default, onnxruntime_pybind_state.cc:1106 CreateExecutionProviderFactoryInstance] Failed to create OpenVINOExecutionProvider. Please refer https://onnxruntime.ai/docs/execution-providers/OpenVINO-ExecutionProvider.html#requirements to ensure all dependencies are met.
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+--- ONNX Session Initialization ---
+Model: /root/.cache/fast-plate-ocr/cct-s-v1-global-model/cct_s_v1_global.onnx
+Available Providers: ['OpenVINOExecutionProvider', 'CPUExecutionProvider']
+Requested Providers: ['OpenVINOExecutionProvider', 'CPUExecutionProvider']
+INFO: Intercepted ONNX Session Creation. Forcing Intel iGPU settings!
+SUCCESS: Session created! Active Providers: ['CPUExecutionProvider']
+WARNING: Model is running entirely on CPU! OpenVINO fallback occurred.
+-----------------------------------
+
+INFO: ALPR initialized with yolo-v9-t-640 detector + cct-s-v1 OCR
+INFO:     172.19.0.4:39646 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:39662 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:39670 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:39674 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:39682 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:39690 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:39704 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47052 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47066 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47070 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47080 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47082 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47096 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47104 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47116 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47132 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:47140 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44590 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44600 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44608 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44618 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44628 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44630 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44640 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44652 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44658 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56922 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56924 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56938 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56940 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56954 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56956 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56966 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56968 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56980 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:56986 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60298 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60306 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60318 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60328 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60334 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60338 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60348 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60362 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60376 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49916 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49920 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49930 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49932 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49946 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49956 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49970 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49986 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49988 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:49990 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60568 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60578 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60588 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60596 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60608 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60610 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60616 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60624 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:60632 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44908 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44922 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44936 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44946 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44950 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44962 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44976 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44982 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:44994 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:45000 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:34400 - "POST /analyze HTTP/1.1" 200 OK
+INFO:     172.19.0.4:34412 - "POST /analyze HTTP/1.1" 200 OK

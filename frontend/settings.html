@@ -633,10 +633,18 @@
                             <!-- Preview Image (refreshes every poll tick) -->
                             <div x-show="status.state === 'connected' || status.state === 'connecting'"
                                 style="margin-bottom: 0.75rem;">
-                                <img :src="'/api/rtsp/preview?t=' + pollTick"
+                                <img :src="'/api/rtsp/preview?t=' + pollTick" id="rtsp-preview-img"
                                     style="width:100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); max-height: 220px; object-fit: cover;"
                                     alt="RTSP Vorschau" onerror="this.style.display='none'"
                                     onload="this.style.display='block'">
+
+                                <div style="margin-top: 0.5rem; text-align: center;">
+                                    <button class="btn"
+                                        style="background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); font-size: 0.75rem; padding: 0.4rem 0.8rem;"
+                                        @click="openROISetup()">
+                                        📐 Erkennungsbereich (Maske) festlegen
+                                    </button>
+                                </div>
                             </div>
 
                             <!-- Backpressure Warning -->
@@ -691,6 +699,41 @@
                                         x-text="status.last_confidence ? (status.last_confidence * 100).toFixed(0) + '%' : ''"></span>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ROI Setup Modal -->
+                <div x-show="roiModalOpen" x-cloak
+                    style="position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.9); z-index: 1000; display: flex; flex-direction: column;">
+                    <div
+                        style="padding: 1rem; background: #1e1e2d; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h3 style="color: #fff; margin-bottom: 0.2rem;">Erkennungsbereich (ROI) festlegen</h3>
+                            <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem;">Klicke auf das Bild, um ein
+                                Polygon (Vieleck) um die zu überwachende Straße zu zeichnen. Alles außerhalb wird für
+                                die KI unsichtbar (schwarz).</p>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn" style="background: rgba(248,113,113,0.15); color: #f87171;"
+                                @click="clearROI()">🗑️ Löschen</button>
+                            <button class="btn" style="background: rgba(255,255,255,0.1); color: #fff;"
+                                @click="closeROISetup()">Abbrechen</button>
+                            <button class="btn btn-primary" style="width: auto;" @click="saveROI()">Speichern</button>
+                        </div>
+                    </div>
+                    <div
+                        style="flex-grow: 1; display: flex; align-items: center; justify-content: center; padding: 2rem; position: relative;">
+                        <!-- Hidden img config text area used by global settings API -->
+                        <input type="hidden" id="rtsp_roi_polygon" value="">
+
+                        <div
+                            style="position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.2);">
+                            <img :src="roiImageUrl" id="roi-base-img"
+                                style="display: block; max-width: 80vw; max-height: 70vh;" @load="initCanvas()">
+                            <canvas id="roi-canvas"
+                                style="position: absolute; top:0; left:0; width: 100%; height: 100%; cursor: crosshair;"
+                                @mousedown="addROIPoint" @mousemove="hoverROIPoint"></canvas>
                         </div>
                     </div>
                 </div>
@@ -956,6 +999,131 @@
                     if (!isoStr) return '';
                     const d = new Date(isoStr);
                     return d.toLocaleTimeString('de-DE');
+                },
+
+                // ROI Logic
+                roiModalOpen: false,
+                roiImageUrl: '',
+                roiPoints: [], // array of {x: relative_0_to_1, y: relative_0_to_1}
+                roiMousePos: null,
+                roiCanvasCtx: null,
+
+                openROISetup() {
+                    this.roiImageUrl = '/api/rtsp/preview?t=' + Date.now();
+                    const saved = document.getElementById('rtsp_roi_polygon').value;
+                    try {
+                        this.roiPoints = saved ? JSON.parse(saved) : [];
+                    } catch (e) { this.roiPoints = []; }
+                    this.roiModalOpen = true;
+                    // Auto-pause stream polling while editing
+                    clearInterval(this._interval);
+                },
+
+                closeROISetup() {
+                    this.roiModalOpen = false;
+                    this.roiPoints = [];
+                    // Resume polling
+                    this.startPolling();
+                },
+
+                clearROI() {
+                    this.roiPoints = [];
+                    this.drawCanvas();
+                },
+
+                saveROI() {
+                    const str = JSON.stringify(this.roiPoints);
+                    document.getElementById('rtsp_roi_polygon').value = str;
+                    saveSettings(); // triggers the global save
+                    this.closeROISetup();
+                },
+
+                initCanvas() {
+                    const img = document.getElementById('roi-base-img');
+                    const canvas = document.getElementById('roi-canvas');
+                    if (!img || !canvas) return;
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    this.roiCanvasCtx = canvas.getContext('2d');
+                    this.drawCanvas();
+                },
+
+                addROIPoint(e) {
+                    const rect = e.target.getBoundingClientRect();
+                    const x = (e.clientX - rect.left) / rect.width;
+                    const y = (e.clientY - rect.top) / rect.height;
+                    this.roiPoints.push({ x, y });
+                    this.drawCanvas();
+                },
+
+                hoverROIPoint(e) {
+                    const rect = e.target.getBoundingClientRect();
+                    this.roiMousePos = {
+                        x: (e.clientX - rect.left) / rect.width,
+                        y: (e.clientY - rect.top) / rect.height
+                    };
+                    this.drawCanvas();
+                },
+
+                drawCanvas() {
+                    const canvas = document.getElementById('roi-canvas');
+                    if (!canvas || !this.roiCanvasCtx) return;
+                    const ctx = this.roiCanvasCtx;
+                    const w = canvas.width;
+                    const h = canvas.height;
+
+                    ctx.clearRect(0, 0, w, h);
+
+                    // Draw blackout mask everywhere EXCEPT inside the polygon
+                    if (this.roiPoints.length >= 3) {
+                        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                        ctx.fillRect(0, 0, w, h);
+
+                        ctx.globalCompositeOperation = 'destination-out';
+                        ctx.beginPath();
+                        ctx.moveTo(this.roiPoints[0].x * w, this.roiPoints[0].y * h);
+                        for (let i = 1; i < this.roiPoints.length; i++) {
+                            ctx.lineTo(this.roiPoints[i].x * w, this.roiPoints[i].y * h);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.globalCompositeOperation = 'source-over';
+
+                        // Outline
+                        ctx.strokeStyle = '#34d399';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+
+                    // Draw points and lines (while drawing)
+                    ctx.strokeStyle = '#34d399';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+
+                    for (let i = 0; i < this.roiPoints.length; i++) {
+                        const px = this.roiPoints[i].x * w;
+                        const py = this.roiPoints[i].y * h;
+
+                        if (i === 0) ctx.moveTo(px, py);
+                        else ctx.lineTo(px, py);
+
+                        // Draw dot
+                        ctx.fillStyle = '#fff';
+                        ctx.beginPath();
+                        ctx.arc(px, py, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.moveTo(px, py);
+                    }
+
+                    if (this.roiPoints.length > 0 && this.roiMousePos) {
+                        ctx.lineTo(this.roiMousePos.x * w, this.roiMousePos.y * h);
+                        if (this.roiPoints.length >= 2) { // Close preview line
+                            ctx.lineTo(this.roiPoints[0].x * w, this.roiPoints[0].y * h);
+                        }
+                        ctx.strokeStyle = 'rgba(52, 211, 153, 0.5)';
+                        ctx.stroke();
+                    }
                 }
             };
         }
