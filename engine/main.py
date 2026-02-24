@@ -8,6 +8,33 @@ try:
     # Use the models from fast-alpr HuggingFace demo that work well for European plates:
     # Detector: yolo-v9-t-640 = 640px input, great accuracy for plate localization
     # OCR: cct-s-v1 = "small" model (better than default "xs"), trained on global plates
+    import onnxruntime as ort
+    
+    # ---------------------------------------------------------
+    # MONKEY-PATCH for OpenVINO ONNXRuntime
+    # Forces open-image-models to use the Intel GPU via OpenVINO
+    # instead of rendering on the CPU.
+    # ---------------------------------------------------------
+    original_InferenceSession = ort.InferenceSession
+
+    def patched_InferenceSession(path_or_bytes, sess_options=None, providers=None, provider_options=None, **kwargs):
+        if providers and "OpenVINOExecutionProvider" in providers:
+            print(f"INFO: Intercepted ONNX Session Creation for {path_or_bytes}. Forcing Intel iGPU settings!")
+            # OpenVINO specific options to target Intel GPU (iHD/i965)
+            # If the user has an Intel CPU with integrated graphics, this offloads the heavy YOLOv9 network.
+            forced_options = [{
+                'device_type': 'GPU',
+                'precision': 'FP16'
+            }]
+            # Pad the rest of the providers with empty options if there are multiple providers
+            provider_opt_list = forced_options + [None] * (len(providers) - 1)
+            return original_InferenceSession(path_or_bytes, sess_options, providers, provider_options=provider_opt_list, **kwargs)
+        
+        return original_InferenceSession(path_or_bytes, sess_options, providers, provider_options, **kwargs)
+
+    ort.InferenceSession = patched_InferenceSession
+    # ---------------------------------------------------------
+
     alpr = ALPR(
         detector_model="yolo-v9-t-640-license-plate-end2end",
         ocr_model="cct-s-v1-global-model",
