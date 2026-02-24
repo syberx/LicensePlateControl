@@ -568,7 +568,7 @@ def rtsp_grabber():
     cap = None
     current_url = None
     consecutive_fails = 0
-    MAX_FAILS_BEFORE_RECONNECT = 5
+    MAX_FAILS_BEFORE_RECONNECT = 15  # Tolerant: RTSP drops occasional frames
     frame_counter = 0
     capture_times = []
 
@@ -608,8 +608,12 @@ def rtsp_grabber():
                 rtsp_status["message"] = "Verbinde..."
                 logger.info(f"📹 RTSP: Connecting to {rtsp_url}")
 
+                # Use TCP transport for more reliable RTSP connections
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
                 cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000)  # 10s connect timeout
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)   # 5s read timeout
 
                 if cap.isOpened():
                     current_url = rtsp_url
@@ -617,7 +621,7 @@ def rtsp_grabber():
                     frame_counter = 0
                     rtsp_status["state"] = "connected"
                     rtsp_status["message"] = "Verbunden — warte auf Frames..."
-                    logger.info(f"📹 RTSP: Connected! Mode={interval_mode}, Val={interval_value}")
+                    logger.info(f"📹 RTSP: Connected (TCP)! Mode={interval_mode}, Val={interval_value}")
                 else:
                     rtsp_status["state"] = "error"
                     rtsp_status["message"] = "Verbindung fehlgeschlagen (15s Retry)"
@@ -631,15 +635,18 @@ def rtsp_grabber():
             ret, frame = cap.read()
             if not ret or frame is None:
                 consecutive_fails += 1
-                rtsp_status["message"] = f"Frame-Fehler ({consecutive_fails}/{MAX_FAILS_BEFORE_RECONNECT})"
                 if consecutive_fails >= MAX_FAILS_BEFORE_RECONNECT:
                     rtsp_status["state"] = "error"
                     rtsp_status["message"] = "Stream abgebrochen — Reconnecting..."
+                    logger.warning(f"📹 RTSP: {consecutive_fails} consecutive failures. Reconnecting...")
                     cap.release()
                     cap = None
                     current_url = None
                     consecutive_fails = 0
                     time.sleep(5)
+                else:
+                    # Brief pause before retrying — don't hammer a struggling stream
+                    time.sleep(0.5)
                 continue
 
             consecutive_fails = 0
