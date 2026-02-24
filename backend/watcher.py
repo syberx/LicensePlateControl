@@ -174,6 +174,19 @@ last_mqtt_trigger = {} # {plate_text: timestamp}
 
 def process_single_image(img_path: str) -> dict:
     """Send a single image to the engine and return the best plate result."""
+    # Wait for the file to finish writing (e.g. from FTP or Blue Iris)
+    start_time = time.time()
+    last_size = -1
+    while time.time() - start_time < 2.0:
+        try:
+            current_size = os.path.getsize(img_path)
+            if current_size > 0 and current_size == last_size:
+                break
+            last_size = current_size
+        except OSError:
+            pass
+        time.sleep(0.1)
+
     try:
         with open(img_path, 'rb') as f:
             files = {'file': (os.path.basename(img_path), f, 'image/jpeg')}
@@ -319,10 +332,12 @@ def process_first_image(folder_path: str, img_path: str):
     logger.info(f"⚡ FAST-FIRST: Processing {os.path.basename(img_path)} immediately")
     
     result = process_single_image(img_path)
-    plate = result["plate"]
-    conf = result["confidence"]
+    plate = result.get("plate", "")
+    conf = result.get("confidence", 0.0)
+    proc_time = result.get("processing_time_ms")
     
-    logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f})")
+    proc_str = f" | {proc_time}ms" if proc_time else ""
+    logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
     
     # Fuzzy match against DB
     matched_plate, match_score, decision = fuzzy_match_plate(plate)
@@ -445,9 +460,11 @@ def process_followup_images(folder_path: str):
     image_results = []
     for img_path in process_list:
         result = process_single_image(img_path)
-        plate = result["plate"]
-        conf = result["confidence"]
-        logger.info(f"  [{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f})")
+        plate = result.get("plate", "")
+        conf = result.get("confidence", 0.0)
+        proc_time = result.get("processing_time_ms")
+        proc_str = f" | {proc_time}ms" if proc_time else ""
+        logger.info(f"  [{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
         image_results.append((img_path, result))
         
         if conf > best_conf and plate:
@@ -1083,10 +1100,12 @@ def process_startup_series(folder_path: str, imgs: list):
     
     for i, img_path in enumerate(imgs):
         result = process_single_image(img_path)
-        plate = result["plate"]
-        conf = result["confidence"]
+        plate = result.get("plate", "")
+        conf = result.get("confidence", 0.0)
         has_plate = bool(plate and plate != "UNKNOWN" and conf > 0.3)
-        logger.info(f"  [{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f})")
+        proc_time = result.get("processing_time_ms")
+        proc_str = f" | {proc_time}ms" if proc_time else ""
+        logger.info(f"  [{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
         image_results.append((img_path, result))
         
         if has_plate and first_trigger_idx is None:
