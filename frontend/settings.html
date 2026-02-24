@@ -476,7 +476,7 @@
                     </div>
                 </div>
 
-                <div x-show="tab === 'rtsp'" x-cloak>
+                <div x-show="tab === 'rtsp'" x-cloak x-data="rtspPanel()" x-init="startPolling()">
                     <div class="settings-card">
                         <div class="toggle-wrap">
                             <div>
@@ -499,11 +499,20 @@
                                     inkl. Zugangsdaten und Pfad.</p>
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Analyse-Intervall (Sekunden)</label>
+                                <label class="form-label">Intervall-Modus</label>
+                                <select id="rtsp_interval_mode" class="form-input">
+                                    <option value="seconds">Sekunden (alle X Sekunden analysieren)</option>
+                                    <option value="frames">Frames (jeden X. Frame analysieren)</option>
+                                </select>
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Wähle, ob das Intervall in
+                                    Sekunden oder in Frame-Abständen gemessen wird.</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Intervall-Wert</label>
                                 <input type="number" id="rtsp_interval" class="form-input" placeholder="3" value="3"
-                                    min="1" max="60">
-                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Wie oft ein Frame
-                                    analysiert werden soll. Empfohlen: 2–5 Sekunden.</p>
+                                    min="1" max="300">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Bei Sekunden: z.B. 3 =
+                                    alle 3 Sekunden. Bei Frames: z.B. 30 = jeder 30. Frame.</p>
                             </div>
                             <div class="form-group">
                                 <label class="form-label">Kameraname</label>
@@ -513,6 +522,25 @@
                                     die Frames verwendet.</p>
                             </div>
                         </form>
+
+                        <!-- Live Status Widget -->
+                        <div
+                            style="margin-top: 1.5rem; padding: 1rem; background: rgba(255,255,255,0.04); border-radius: 10px; border: 1px solid rgba(255,255,255,0.08);">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                <div :style="'width:10px; height:10px; border-radius:50%; background:' + statusColor()"
+                                    style="flex-shrink:0;"></div>
+                                <span style="font-weight: 600; font-size: 0.85rem;"
+                                    x-text="status.state === 'connected' ? '● Verbunden' : status.state === 'connecting' ? '◌ Verbindet...' : status.state === 'error' ? '✗ Fehler' : '○ Deaktiviert'"></span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: rgba(255,255,255,0.6); margin-bottom: 0.5rem;"
+                                x-text="status.message"></p>
+                            <div style="display: flex; gap: 1.5rem; font-size: 0.75rem; color: rgba(255,255,255,0.4);">
+                                <span>📸 <span x-text="status.frames_captured"></span> Frames</span>
+                                <span>⚡ <span x-text="status.fps"></span> FPS</span>
+                                <span x-show="status.last_capture">🕒 <span
+                                        x-text="formatTime(status.last_capture)"></span></span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -568,7 +596,7 @@
             const keys = [
                 'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
-                'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_camera_name',
+                'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_interval_mode', 'rtsp_camera_name',
                 'cleanup_days_known', 'cleanup_days_unknown'
             ];
             let hasError = false;
@@ -595,6 +623,44 @@
             } else {
                 showMsg('success', '✓ Einstellungen erfolgreich gespeichert');
             }
+        }
+
+        function rtspPanel() {
+            return {
+                status: {
+                    state: 'disabled',
+                    message: 'Lade Status...',
+                    frames_captured: 0,
+                    fps: 0,
+                    last_capture: null
+                },
+                _interval: null,
+
+                startPolling() {
+                    this.fetchStatus();
+                    this._interval = setInterval(() => this.fetchStatus(), 3000);
+                },
+
+                async fetchStatus() {
+                    try {
+                        const res = await fetch('/api/rtsp/status');
+                        if (res.ok) this.status = await res.json();
+                    } catch (e) { }
+                },
+
+                statusColor() {
+                    if (this.status.state === 'connected') return '#34d399';
+                    if (this.status.state === 'connecting') return '#fbbf24';
+                    if (this.status.state === 'error') return '#f87171';
+                    return 'rgba(255,255,255,0.3)';
+                },
+
+                formatTime(isoStr) {
+                    if (!isoStr) return '';
+                    const d = new Date(isoStr);
+                    return d.toLocaleTimeString('de-DE');
+                }
+            };
         }
     </script>
 </body>

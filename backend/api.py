@@ -207,3 +207,9 @@ def update_setting(setting: SettingCreate, db: Session = Depends(get_db), api_ke
     db.commit()
     db.refresh(db_setting)
     return db_setting
+
+@router.get("/api/rtsp/status")
+def get_rtsp_status():
+    """Return current RTSP grabber status (state, frames, fps, etc.)."""
+    from watcher import rtsp_status
+    return rtsp_status
