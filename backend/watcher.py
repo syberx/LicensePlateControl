@@ -644,6 +644,17 @@ rtsp_active_session = {
 rtsp_preview_frame = None
 rtsp_unmasked_preview_frame = None
 
+# Cache for the ROI mask to avoid recalculating np.zeros and cv2.fillPoly on every frame
+rtsp_mask_cache = {
+    "polygon_str": "",
+    "frame_shape": None,
+    "mask": None,
+    "bbox": None # (x, y, w, h)
+}
+
+# Rolling average cache for processing times
+rtsp_processing_times = deque(maxlen=10)
+
 # Tracks last-seen timestamp per plate to prevent spam events (e.g., parked cars)
 rtsp_cooldown = {}
 
@@ -799,7 +810,10 @@ def rtsp_reader_thread():
 def rtsp_processor_thread():
     """Consumer Thread: Wakes up based on interval settings, grabs latest frame, analyzes it."""
     global rtsp_status, rtsp_preview_frame, rtsp_unmasked_preview_frame, rtsp_latest_frame_data, rtsp_active_session
+    global rtsp_mask_cache, rtsp_processing_times
     import cv2
+    import numpy as np
+    import json
     capture_times = []
     last_frame_grabbed = 0
 
@@ -854,36 +868,46 @@ def rtsp_processor_thread():
 
             if polygon_str:
                 try:
-                    import json
-                    import numpy as np
                     points = json.loads(polygon_str)
                     if len(points) >= 3:
                         h, w = frame.shape[:2]
-                        # Convert relative coordinates (0.0 to 1.0) to absolute pixels
-                        poly_pts = np.array([
-                            [int(p["x"] * w), int(p["y"] * h)] 
-                            for p in points
-                        ], np.int32)
-                        poly_pts = poly_pts.reshape((-1, 1, 2))
                         
-                        logger.info(f"Applying ROI Mask! Original Shape: {frame.shape}, Points: {points}")
-                        # Create black mask and draw white polygon
-                        mask = np.zeros((h, w), dtype=np.uint8)
-                        cv2.fillPoly(mask, [poly_pts], 255)
+                        # Cache mechanism: only rebuild mask if polygon or frame shape changed
+                        if (rtsp_mask_cache["polygon_str"] != polygon_str or 
+                            rtsp_mask_cache["frame_shape"] != frame.shape[:2]):
+                            
+                            # Convert relative coordinates (0.0 to 1.0) to absolute pixels
+                            poly_pts = np.array([
+                                [int(p["x"] * w), int(p["y"] * h)] 
+                                for p in points
+                            ], np.int32)
+                            poly_pts = poly_pts.reshape((-1, 1, 2))
+                            
+                            logger.info(f"Rebuilding ROI Mask Cache! Shape: {frame.shape}, Points: {points}")
+                            
+                            # Create black mask and draw white polygon
+                            mask = np.zeros((h, w), dtype=np.uint8)
+                            cv2.fillPoly(mask, [poly_pts], 255)
+                            
+                            # Calculate Bounding Rect
+                            x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
+                            x_rect = max(0, x_rect)
+                            y_rect = max(0, y_rect)
+                            w_rect = min(w - x_rect, w_rect)
+                            h_rect = min(h - y_rect, h_rect)
+                            
+                            # Store in cache
+                            rtsp_mask_cache["polygon_str"] = polygon_str
+                            rtsp_mask_cache["frame_shape"] = frame.shape[:2]
+                            rtsp_mask_cache["mask"] = mask
+                            rtsp_mask_cache["bbox"] = (x_rect, y_rect, w_rect, h_rect)
+
+                        # Apply cached mask to original frame
+                        cached_mask = rtsp_mask_cache["mask"]
+                        frame[cached_mask == 0] = [0, 0, 0]
                         
-                        # Apply mask to original frame (set all pixels outside the polygon to black)
-                        frame[mask == 0] = [0, 0, 0]
-                        logger.info(f"ROI Mask Applied. New Shape: {frame.shape}")
-                        
-                        # Add Cropping for Engine to save processing time/network load
-                        x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
-                        # Ensure bounds
-                        x_rect = max(0, x_rect)
-                        y_rect = max(0, y_rect)
-                        w_rect = min(w - x_rect, w_rect)
-                        h_rect = min(h - y_rect, h_rect)
-                        
-                        # We crop the frame so the engine receives a smaller image
+                        # Crop frame using cached bbox
+                        x_rect, y_rect, w_rect, h_rect = rtsp_mask_cache["bbox"]
                         frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
                     else:
                         frame_for_engine = frame
@@ -927,7 +951,12 @@ def rtsp_processor_thread():
             confidence = result.get("confidence", 0.0)
             proc_ms = result.get("processing_time_ms")
 
-            rtsp_status["last_processing_ms"] = round(proc_ms, 1) if proc_ms else None
+            if proc_ms:
+                rtsp_processing_times.append(proc_ms)
+                avg_ms = sum(rtsp_processing_times) / len(rtsp_processing_times)
+                rtsp_status["last_processing_ms"] = round(avg_ms, 1)
+            else:
+                rtsp_status["last_processing_ms"] = None
 
             # Store in debug buffer (showing exactly what the engine saw)
             _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
