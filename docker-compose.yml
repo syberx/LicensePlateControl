@@ -6,6 +6,7 @@ services:
     container_name: licenseplatecontrol-postgres
     restart: unless-stopped
     environment:
+      - TZ=Europe/Berlin
       - POSTGRES_USER=lpc
       - POSTGRES_PASSWORD=lpc_secret_2026
       - POSTGRES_DB=licenseplatecontrol
@@ -27,6 +28,7 @@ services:
     volumes:
       - ./volumes/events:/events
     environment:
+      - TZ=Europe/Berlin
       - DATABASE_URL=postgresql://lpc:lpc_secret_2026@postgres:5432/licenseplatecontrol
       - ENGINE_URL=http://engine:8000
       - API_KEY=secretmvpkey123
@@ -53,6 +55,7 @@ services:
       - ./volumes/models:/models
       - ./volumes/events:/events
     environment:
+      - TZ=Europe/Berlin
       - HF_HOME=/models
       - ORT_OPENVINO_DEVICE=GPU   # Tell onnxruntime-openvino to use Intel GPU (falls back to CPU if unavailable)
     # Intel iGPU passthrough for OpenVINO acceleration

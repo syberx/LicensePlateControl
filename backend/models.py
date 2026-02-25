@@ -10,13 +10,13 @@ class Plate(Base):
     plate_text = Column(String, unique=True, index=True)
     active = Column(Boolean, default=True)
     description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.datetime.now)
 
 class Event(Base):
     __tablename__ = "events"
 
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=datetime.datetime.now)
     detected_plate = Column(String, index=True)
     confidence = Column(String)
     decision = Column(String)
@@ -44,7 +44,7 @@ class EventImage(Base):
     confidence = Column(Float, nullable=True)
     has_plate = Column(Boolean, default=False)
     is_trigger = Column(Boolean, default=False)  # First plate detection that triggered HA
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.datetime.now)
     processing_time_ms = Column(Float, nullable=True)
 
     event = relationship("Event", back_populates="images")
@@ -54,4 +54,4 @@ class Setting(Base):
 
     key = Column(String, primary_key=True, index=True)
     value = Column(String, nullable=True)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.now, onupdate=datetime.datetime.now)

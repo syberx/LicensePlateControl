@@ -38,7 +38,7 @@ class MemoryLogHandler(logging.Handler):
             return
         try:
             entry = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "level": record.levelname,
                 "source": record.name,
                 "message": self.format(record),
@@ -297,7 +297,7 @@ def trigger_mqtt(plate_text: str) -> bool:
             client.username_pw_set(user, password)
         client.connect(broker, port, 5)
         from datetime import datetime # Import datetime here to avoid circular dependency if it's not already imported globally
-        payload = json.dumps({"plate": plate_text, "timestamp": datetime.utcnow().isoformat()})
+        payload = json.dumps({"plate": plate_text, "timestamp": datetime.now().isoformat()})
         client.publish(topic, payload)
         client.disconnect()
         logger.info(f"MQTT published to topic {topic}")
@@ -370,7 +370,7 @@ def process_first_image(folder_path: str, img_path: str):
             mqtt_triggered = trigger_mqtt(matched_plate or plate)
             
         if ha_triggered or mqtt_triggered:
-            trigger_ts = datetime.utcnow()
+            trigger_ts = datetime.now()
     
     # Create event in DB
     sid = str(uuid.uuid4())[:8]
@@ -567,7 +567,7 @@ def check_storage_cleanup():
             days_known = int(get_setting(db, "cleanup_days_known", "30"))
             days_unknown = int(get_setting(db, "cleanup_days_unknown", "2"))
             
-            now = datetime.utcnow()
+            now = datetime.now()
             cutoff_known = now - timedelta(days=days_known)
             cutoff_unknown = now - timedelta(days=days_unknown)
             
@@ -689,7 +689,7 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
     debug_frame_counter += 1
     entry = {
         "id": debug_frame_counter,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "jpeg": jpeg_bytes,
         "plate": plate,
         "confidence": round(confidence, 3),
@@ -697,7 +697,7 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
     }
     debug_frame_buffer.append(entry)
     # Purge entries older than 1 hour
-    cutoff = datetime.utcnow() - timedelta(seconds=DEBUG_BUFFER_MAX_AGE_SECONDS)
+    cutoff = datetime.now() - timedelta(seconds=DEBUG_BUFFER_MAX_AGE_SECONDS)
     while debug_frame_buffer and datetime.fromisoformat(debug_frame_buffer[0]["timestamp"]) < cutoff:
         debug_frame_buffer.popleft()
 
@@ -972,7 +972,7 @@ def rtsp_processor_thread():
                 _t_preview = time.time() - _t_prev_start
             
             rtsp_status["frames_analyzed"] += 1
-            rtsp_status["last_capture"] = datetime.utcnow().isoformat()
+            rtsp_status["last_capture"] = datetime.now().isoformat()
             
             # FPS tracking
             now = time.time()
@@ -1043,7 +1043,7 @@ def rtsp_processor_thread():
                     mq_ok = trigger_mqtt(rtsp_active_session["best_plate"])
                     rtsp_active_session["has_triggered"] = ha_ok or mq_ok
                     if rtsp_active_session["has_triggered"]:
-                        rtsp_active_session["trigger_timestamp"] = datetime.utcnow()
+                        rtsp_active_session["trigger_timestamp"] = datetime.now()
                         
                 # Add current frame to session gallery
                 rtsp_active_session["images"].append({
@@ -1102,11 +1102,11 @@ def rtsp_processor_thread():
                 db = SessionLocal()
                 try:
                     event = models.Event(
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(),
                         detected_plate=s_plate,
                         confidence=f"{s_conf:.4f}",
                         decision=s_dec_final,
-                        series_id=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                        series_id=f"rtsp_{cam_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                         image_count=len(s_imgs),
                         matched_plate=s_matched_plate,
                         match_score=s_match_score,
@@ -1120,7 +1120,7 @@ def rtsp_processor_thread():
                     for i, img_data in enumerate(s_imgs):
                         event_image = models.EventImage(
                             event_id=event.id,
-                            filename=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%H%M%S')}_{i}.jpg",
+                            filename=f"rtsp_{cam_name}_{datetime.now().strftime('%H%M%S')}_{i}.jpg",
                             image_data=img_data["jpeg_bytes"],
                             detected_plate=img_data["plate"],
                             confidence=img_data["confidence"],
