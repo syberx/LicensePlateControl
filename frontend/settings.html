@@ -418,7 +418,7 @@
         },
         formatDebugTime(ts) {
             if (!ts) return '';
-            const d = new Date(ts + 'Z');
+            const d = new Date(ts);
             return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         },
         debugTimeRange() {
