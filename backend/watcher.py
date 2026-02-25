@@ -1029,7 +1029,7 @@ def rtsp_processor_thread():
                         
                 # Add current frame to session gallery
                 rtsp_active_session["images"].append({
-                    "jpeg_bytes": jpeg_bytes,
+                    "jpeg_bytes": engine_bytes,
                     "plate": plate,
                     "confidence": confidence,
                     "proc_ms": proc_ms,
@@ -1046,7 +1046,7 @@ def rtsp_processor_thread():
                 # If we are in an active session, add empty frames up to a limit (so gallery shows the car leaving)
                 if rtsp_active_session["is_active"] and len(rtsp_active_session["images"]) < 10:
                      rtsp_active_session["images"].append({
-                        "jpeg_bytes": jpeg_bytes,
+                        "jpeg_bytes": engine_bytes,
                         "plate": "UNKNOWN",
                         "confidence": 0.0,
                         "proc_ms": proc_ms,
