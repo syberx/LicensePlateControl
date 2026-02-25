@@ -1159,8 +1159,9 @@ def rtsp_processor_thread():
             else:
                 rtsp_status["backpressure"] = False
 
-            # Spike debug log: only fires when cycle exceeds 500ms — single compact line
-            if _t_total > 0.5:
+            # Spike debug log: only fires when cycle exceeds 80% of configured interval
+            _spike_thresh = (val * 0.8) if mode == "seconds" and val > 0 else 0.5
+            if _t_total > _spike_thresh:
                 _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
                 _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
                 parts = [
