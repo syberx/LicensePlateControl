@@ -874,10 +874,26 @@ def rtsp_processor_thread():
                         # Apply mask to original frame (set all pixels outside the polygon to black)
                         frame[mask == 0] = [0, 0, 0]
                         logger.info(f"ROI Mask Applied. New Shape: {frame.shape}")
+                        
+                        # Add Cropping for Engine to save processing time/network load
+                        x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
+                        # Ensure bounds
+                        x_rect = max(0, x_rect)
+                        y_rect = max(0, y_rect)
+                        w_rect = min(w - x_rect, w_rect)
+                        h_rect = min(h - y_rect, h_rect)
+                        
+                        # We crop the frame so the engine receives a smaller image
+                        frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+                    else:
+                        frame_for_engine = frame
                 except Exception as e:
                     import traceback
                     logger.error(f"Failed to apply ROI mask: {e}")
                     logger.error(traceback.format_exc())
+                    frame_for_engine = frame
+            else:
+                frame_for_engine = frame
 
             success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success:
@@ -885,6 +901,12 @@ def rtsp_processor_thread():
                 
             jpeg_bytes = jpeg_buf.tobytes()
             rtsp_preview_frame = jpeg_bytes  # Always update latest GUI preview frame
+            
+            # Encode specifically for the engine (cropped if mask exists)
+            success_eng, eng_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not success_eng:
+                continue
+            engine_bytes = eng_buf.tobytes()
             
             rtsp_status["frames_analyzed"] += 1
             rtsp_status["last_capture"] = datetime.utcnow().isoformat()
@@ -898,7 +920,7 @@ def rtsp_processor_thread():
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
             analysis_start = time.time()
-            result = _analyze_frame_bytes(jpeg_bytes, f"rtsp_{cam_name}.jpg")
+            result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
             analysis_duration = time.time() - analysis_start
 
             plate = result.get("plate", "")
