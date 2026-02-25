@@ -59,7 +59,7 @@ services:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "109"   # render group GID – adjust if different on your Proxmox host (run: getent group render)
+      - "992"   # render group GID (from: getent group render → render:x:992:)
     networks:
       - lpc-network
 
