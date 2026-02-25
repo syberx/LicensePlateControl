@@ -929,8 +929,8 @@ def rtsp_processor_thread():
 
             rtsp_status["last_processing_ms"] = round(proc_ms, 1) if proc_ms else None
 
-            # Store in debug buffer
-            _store_debug_frame(jpeg_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
+            # Store in debug buffer (showing exactly what the engine saw)
+            _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
 
             # --- Intelligent Event Grouping Logic Starts Here ---
             is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
