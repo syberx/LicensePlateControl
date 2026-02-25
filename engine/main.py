@@ -20,22 +20,21 @@ try:
     # Detector: yolo-v9-t-640 = 640px input, great accuracy for plate localization
     # OCR: cct-s-v1 = "small" model (better than default "xs"), trained on global plates
 
-    # Detect Intel GPU availability for OpenVINO acceleration
+    # Check if OpenVINO Execution Provider is available in ONNX Runtime
     _ov_device = os.environ.get("ORT_OPENVINO_DEVICE", "CPU")
     try:
-        import openvino as ov
-        core = ov.Core()
-        devices = core.available_devices
-        print(f"INFO: OpenVINO available devices: {devices}")
-        if "GPU" in devices:
-            _ov_device = "GPU"
-            os.environ["ORT_OPENVINO_DEVICE"] = "GPU"
-            print("INFO: Intel GPU detected – forcing ORT_OPENVINO_DEVICE=GPU")
+        import onnxruntime as ort
+        available_eps = ort.get_available_providers()
+        print(f"INFO: ONNX Runtime providers: {available_eps}")
+        if "OpenVINOExecutionProvider" in available_eps:
+            print(f"INFO: OpenVINO EP available – ORT_OPENVINO_DEVICE={_ov_device}")
+            if _ov_device == "GPU":
+                print("INFO: Intel GPU acceleration enabled via OpenVINO EP")
         else:
-            os.environ["ORT_OPENVINO_DEVICE"] = "CPU"
-            print("INFO: No GPU found – using CPU (ensure /dev/dri is passed into container)")
+            _ov_device = "CPU"
+            print("INFO: OpenVINO EP not available – using CPU only")
     except Exception as e:
-        print(f"INFO: OpenVINO device detection skipped ({e}) – using {_ov_device}")
+        print(f"INFO: ONNX Runtime check failed ({e}) – using {_ov_device}")
 
     alpr = ALPR(
         detector_model="yolo-v9-t-640-license-plate-end2end",
