@@ -642,6 +642,7 @@ rtsp_active_session = {
 
 # Latest RTSP preview frame (JPEG bytes) — served via API
 rtsp_preview_frame = None
+rtsp_unmasked_preview_frame = None
 
 # Tracks last-seen timestamp per plate to prevent spam events (e.g., parked cars)
 rtsp_cooldown = {}
@@ -797,7 +798,7 @@ def rtsp_reader_thread():
 
 def rtsp_processor_thread():
     """Consumer Thread: Wakes up based on interval settings, grabs latest frame, analyzes it."""
-    global rtsp_status, rtsp_preview_frame, rtsp_latest_frame_data, rtsp_active_session
+    global rtsp_status, rtsp_preview_frame, rtsp_unmasked_preview_frame, rtsp_latest_frame_data, rtsp_active_session
     import cv2
     capture_times = []
     last_frame_grabbed = 0
@@ -846,9 +847,15 @@ def rtsp_processor_thread():
             finally:
                 db.close()
                 
+            # Save unmasked frame first for the UI ROI Editor
+            s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if s_umb:
+                rtsp_unmasked_preview_frame = b_umb.tobytes()
+
             if polygon_str:
                 try:
                     import json
+                    import numpy as np
                     points = json.loads(polygon_str)
                     if len(points) >= 3:
                         h, w = frame.shape[:2]
@@ -859,14 +866,18 @@ def rtsp_processor_thread():
                         ], np.int32)
                         poly_pts = poly_pts.reshape((-1, 1, 2))
                         
+                        logger.info(f"Applying ROI Mask! Original Shape: {frame.shape}, Points: {points}")
                         # Create black mask and draw white polygon
                         mask = np.zeros((h, w), dtype=np.uint8)
                         cv2.fillPoly(mask, [poly_pts], 255)
                         
-                        # Apply mask to original frame
-                        frame = cv2.bitwise_and(frame, frame, mask=mask)
+                        # Apply mask to original frame (set all pixels outside the polygon to black)
+                        frame[mask == 0] = [0, 0, 0]
+                        logger.info(f"ROI Mask Applied. New Shape: {frame.shape}")
                 except Exception as e:
+                    import traceback
                     logger.error(f"Failed to apply ROI mask: {e}")
+                    logger.error(traceback.format_exc())
 
             success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success:

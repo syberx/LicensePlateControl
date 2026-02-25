@@ -700,40 +700,52 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
 
-                <!-- ROI Setup Modal -->
-                <div x-show="roiModalOpen" x-cloak
-                    style="position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.9); z-index: 1000; display: flex; flex-direction: column;">
-                    <div
-                        style="padding: 1rem; background: #1e1e2d; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <h3 style="color: #fff; margin-bottom: 0.2rem;">Erkennungsbereich (ROI) festlegen</h3>
-                            <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem;">Klicke auf das Bild, um ein
-                                Polygon (Vieleck) um die zu überwachende Straße zu zeichnen. Alles außerhalb wird für
-                                die KI unsichtbar (schwarz).</p>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem;">
-                            <button class="btn" style="background: rgba(248,113,113,0.15); color: #f87171;"
-                                @click="clearROI()">🗑️ Löschen</button>
-                            <button class="btn" style="background: rgba(255,255,255,0.1); color: #fff;"
-                                @click="closeROISetup()">Abbrechen</button>
-                            <button class="btn btn-primary" style="width: auto;" @click="saveROI()">Speichern</button>
-                        </div>
-                    </div>
-                    <div
-                        style="flex-grow: 1; display: flex; align-items: center; justify-content: center; padding: 2rem; position: relative;">
-                        <!-- Hidden img config text area used by global settings API -->
-                        <input type="hidden" id="rtsp_roi_polygon" value="">
+                        <!-- ROI Setup Modal -->
+                        <div x-show="roiModalOpen" x-cloak @keydown.window="handleROIKeydown"
+                            style="position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.9); z-index: 1000; display: flex; flex-direction: column;">
+                            <div
+                                style="padding: 1rem; background: #1e1e2d; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <h3 style="color: #fff; margin-bottom: 0.2rem;">Erkennungsbereich (ROI) festlegen
+                                    </h3>
+                                    <p style="color: rgba(255,255,255,0.5); font-size: 0.8rem;">Klicke auf das Bild, um
+                                        ein
+                                        Polygon (Vieleck) um die zu überwachende Straße zu zeichnen. Alles außerhalb
+                                        wird
+                                        für
+                                        die KI unsichtbar (schwarz).</p>
+                                </div>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <button class="btn" style="background: rgba(248,113,113,0.15); color: #f87171;"
+                                        @click="clearROI()">🗑️ Löschen</button>
+                                    <button class="btn" style="background: rgba(255,255,255,0.1); color: #fff;"
+                                        @click="closeROISetup()">Abbrechen</button>
+                                    <button class="btn btn-primary" style="width: auto;"
+                                        @click="saveROI()">Speichern</button>
+                                </div>
+                            </div>
+                            <div
+                                style="flex-grow: 1; display: flex; align-items: center; justify-content: center; padding: 2rem; position: relative;">
+                                <!-- Hidden img config text area used by global settings API -->
+                                <input type="hidden" id="rtsp_roi_polygon" value="">
 
-                        <div
-                            style="position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.2);">
-                            <img :src="roiImageUrl" id="roi-base-img"
-                                style="display: block; max-width: 80vw; max-height: 70vh;" @load="initCanvas()">
-                            <canvas id="roi-canvas"
-                                style="position: absolute; top:0; left:0; width: 100%; height: 100%; cursor: crosshair;"
-                                @mousedown="addROIPoint" @mousemove="hoverROIPoint"></canvas>
+                                <div
+                                    style="position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.2);">
+                                    <img :src="roiImageUrl" id="roi-base-img"
+                                        style="display: block; max-width: 80vw; max-height: 70vh;" @load="initCanvas()">
+                                    <canvas id="roi-canvas"
+                                        style="position: absolute; top:0; left:0; width: 100%; height: 100%; cursor: crosshair;"
+                                        @mousedown="addROIPoint" @mousemove="hoverROIPoint"
+                                        @dblclick="handleROIDblClick"></canvas>
+                                    <div
+                                        style="position: absolute; bottom: -2.5rem; left: 0; width: 100%; text-align: center; color: rgba(255,255,255,0.7); font-size: 0.85rem; text-shadow: 0 2px 4px rgba(0,0,0,0.8);">
+                                        Tipp: Drücke <kbd
+                                            style="background: rgba(255,255,255,0.1); padding: 0.1rem 0.4rem; border-radius: 4px; font-family: monospace;">ENTER</kbd>
+                                        um die Maske abzuschließen.
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -770,7 +782,8 @@
                                 style="background: rgba(255,255,255,0.04); padding: 0.5rem 0.75rem; border-radius: 6px; text-align: center;">
                                 <div style="color: rgba(255,255,255,0.35);">Zeitraum</div>
                                 <div style="color: #818cf8; font-weight: 600; font-size: 0.7rem;"
-                                    x-text="debugTimeRange()"></div>
+                                    x-text="debugTimeRange()">
+                                </div>
                             </div>
                         </div>
 
@@ -896,7 +909,7 @@
             const keys = [
                 'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
-                'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_interval_mode', 'rtsp_camera_name',
+                'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_interval_mode', 'rtsp_camera_name', 'rtsp_roi_polygon',
                 'cleanup_days_known', 'cleanup_days_unknown', 'folder_watch_enabled'
             ];
             let hasError = false;
@@ -1009,7 +1022,7 @@
                 roiCanvasCtx: null,
 
                 openROISetup() {
-                    this.roiImageUrl = '/api/rtsp/preview?t=' + Date.now();
+                    this.roiImageUrl = '/api/rtsp/preview_unmasked?t=' + Date.now();
                     const saved = document.getElementById('rtsp_roi_polygon').value;
                     try {
                         this.roiPoints = saved ? JSON.parse(saved) : [];
@@ -1036,6 +1049,20 @@
                     document.getElementById('rtsp_roi_polygon').value = str;
                     saveSettings(); // triggers the global save
                     this.closeROISetup();
+                },
+
+                handleROIKeydown(e) {
+                    if (this.roiModalOpen && e.key === 'Enter') {
+                        e.preventDefault();
+                        this.saveROI();
+                    }
+                },
+
+                handleROIDblClick(e) {
+                    if (this.roiModalOpen) {
+                        e.preventDefault();
+                        this.saveROI();
+                    }
                 },
 
                 initCanvas() {

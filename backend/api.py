@@ -246,6 +246,15 @@ def get_rtsp_preview():
         raise HTTPException(status_code=404, detail="No preview available")
     return Response(content=rtsp_preview_frame, media_type="image/jpeg")
 
+@router.get("/api/rtsp/preview_unmasked")
+def get_rtsp_preview_unmasked():
+    """Serve the latest RTSP frame BEFORE the ROI mask is applied, for drawing."""
+    from watcher import rtsp_unmasked_preview_frame
+    if rtsp_unmasked_preview_frame is None:
+        raise HTTPException(status_code=404, detail="No unmasked preview available")
+    return Response(content=rtsp_unmasked_preview_frame, media_type="image/jpeg")
+
+
 # --- System Logs ---
 
 @router.get("/api/logs")
