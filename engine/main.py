@@ -1,5 +1,16 @@
+import os
+# CRITICAL CPU OPTIMIZATION FOR DOCKER:
+# Prevent PyTorch/ONNX from over-spawning threads on virtualized CPUs,
+# which causes massive context switching overhead and slows down inference.
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2"
+os.environ["NUMEXPR_NUM_THREADS"] = "2"
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 import cv2
+cv2.setNumThreads(2)
 import numpy as np
 import time
 
