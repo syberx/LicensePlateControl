@@ -20,11 +20,28 @@ try:
     # Detector: yolo-v9-t-640 = 640px input, great accuracy for plate localization
     # OCR: cct-s-v1 = "small" model (better than default "xs"), trained on global plates
 
+    # Detect Intel GPU availability for OpenVINO acceleration
+    _ov_device = os.environ.get("ORT_OPENVINO_DEVICE", "CPU")
+    try:
+        import openvino as ov
+        core = ov.Core()
+        devices = core.available_devices
+        print(f"INFO: OpenVINO available devices: {devices}")
+        if "GPU" in devices:
+            _ov_device = "GPU"
+            os.environ["ORT_OPENVINO_DEVICE"] = "GPU"
+            print("INFO: Intel GPU detected – forcing ORT_OPENVINO_DEVICE=GPU")
+        else:
+            os.environ["ORT_OPENVINO_DEVICE"] = "CPU"
+            print("INFO: No GPU found – using CPU (ensure /dev/dri is passed into container)")
+    except Exception as e:
+        print(f"INFO: OpenVINO device detection skipped ({e}) – using {_ov_device}")
+
     alpr = ALPR(
         detector_model="yolo-v9-t-640-license-plate-end2end",
         ocr_model="cct-s-v1-global-model",
     )
-    print("INFO: ALPR initialized with yolo-v9-t-640 detector + cct-s-v1 OCR")
+    print(f"INFO: ALPR initialized with yolo-v9-t-640 detector + cct-s-v1 OCR (device: {_ov_device})")
 except ImportError as e:
     print(f"Warning: fast_alpr could not be imported: {e}. Using mock ALPR.")
     alpr = None

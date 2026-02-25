@@ -54,6 +54,12 @@ services:
       - ./volumes/events:/events
     environment:
       - HF_HOME=/models
+      - ORT_OPENVINO_DEVICE=GPU   # Tell onnxruntime-openvino to use Intel GPU (falls back to CPU if unavailable)
+    # Intel iGPU passthrough for OpenVINO acceleration
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "109"   # render group GID – adjust if different on your Proxmox host (run: getent group render)
     networks:
       - lpc-network
 

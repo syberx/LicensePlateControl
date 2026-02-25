@@ -649,11 +649,29 @@ rtsp_mask_cache = {
     "polygon_str": "",
     "frame_shape": None,
     "mask": None,
-    "bbox": None # (x, y, w, h)
+    "bbox": None, # (x, y, w, h)
+    "cropped_mask": None, # mask cropped to bbox (for engine frame masking)
 }
 
 # Rolling average cache for processing times
 rtsp_processing_times = deque(maxlen=10)
+
+# --- Performance: Cached polygon setting (avoids DB query every frame) ---
+_polygon_setting_cache = {"value": "", "last_check": 0.0}
+_POLYGON_CACHE_TTL = 5.0  # seconds – polygon changes are rare, 5s is fine
+
+def _get_cached_polygon() -> str:
+    """Return the ROI polygon JSON string, refreshing from DB at most every 5 seconds."""
+    now = time.time()
+    if now - _polygon_setting_cache["last_check"] > _POLYGON_CACHE_TTL:
+        try:
+            db = SessionLocal()
+            _polygon_setting_cache["value"] = get_setting(db, "rtsp_roi_polygon", "")
+            db.close()
+        except Exception:
+            pass
+        _polygon_setting_cache["last_check"] = now
+    return _polygon_setting_cache["value"]
 
 # Tracks last-seen timestamp per plate to prevent spam events (e.g., parked cars)
 rtsp_cooldown = {}
@@ -852,85 +870,91 @@ def rtsp_processor_thread():
                 continue
 
             # --- Analysis starts here ---
-            # ROI Masking (Mask out background)
-            db = SessionLocal()
-            try:
-                polygon_str = get_setting(db, "rtsp_roi_polygon", "")
-            except Exception:
-                polygon_str = ""
-            finally:
-                db.close()
-                
-            # Save unmasked frame first for the UI ROI Editor
-            s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if s_umb:
-                rtsp_unmasked_preview_frame = b_umb.tobytes()
+            # ROI Masking (optimized: crop-first, then mask small region)
+            polygon_str = _get_cached_polygon()  # cached, no DB query per frame
 
             if polygon_str:
                 try:
                     points = json.loads(polygon_str)
                     if len(points) >= 3:
                         h, w = frame.shape[:2]
-                        
+
                         # Cache mechanism: only rebuild mask if polygon or frame shape changed
-                        if (rtsp_mask_cache["polygon_str"] != polygon_str or 
+                        if (rtsp_mask_cache["polygon_str"] != polygon_str or
                             rtsp_mask_cache["frame_shape"] != frame.shape[:2]):
-                            
+
                             # Convert relative coordinates (0.0 to 1.0) to absolute pixels
                             poly_pts = np.array([
-                                [int(p["x"] * w), int(p["y"] * h)] 
+                                [int(p["x"] * w), int(p["y"] * h)]
                                 for p in points
                             ], np.int32)
                             poly_pts = poly_pts.reshape((-1, 1, 2))
-                            
+
                             logger.info(f"Rebuilding ROI Mask Cache! Shape: {frame.shape}, Points: {points}")
-                            
+
                             # Create black mask and draw white polygon
                             mask = np.zeros((h, w), dtype=np.uint8)
                             cv2.fillPoly(mask, [poly_pts], 255)
-                            
+
                             # Calculate Bounding Rect
                             x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
                             x_rect = max(0, x_rect)
                             y_rect = max(0, y_rect)
                             w_rect = min(w - x_rect, w_rect)
                             h_rect = min(h - y_rect, h_rect)
-                            
+
+                            # Pre-compute cropped mask for engine (avoids re-slicing every frame)
+                            cropped_mask = mask[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+
                             # Store in cache
                             rtsp_mask_cache["polygon_str"] = polygon_str
                             rtsp_mask_cache["frame_shape"] = frame.shape[:2]
                             rtsp_mask_cache["mask"] = mask
                             rtsp_mask_cache["bbox"] = (x_rect, y_rect, w_rect, h_rect)
+                            rtsp_mask_cache["cropped_mask"] = cropped_mask
 
-                        # Apply cached mask to original frame
-                        cached_mask = rtsp_mask_cache["mask"]
-                        frame[cached_mask == 0] = [0, 0, 0]
-                        
-                        # Crop frame using cached bbox
+                        # OPTIMIZED: Crop first (cheap numpy view), then mask only the small cropped region
                         x_rect, y_rect, w_rect, h_rect = rtsp_mask_cache["bbox"]
-                        frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+                        frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect].copy()
+                        cropped_mask = rtsp_mask_cache["cropped_mask"]
+                        # cv2.bitwise_and is SIMD-optimized and much faster than numpy boolean indexing
+                        frame_for_engine = cv2.bitwise_and(frame_for_engine, frame_for_engine, mask=cropped_mask)
+                        has_roi = True
                     else:
                         frame_for_engine = frame
+                        has_roi = False
                 except Exception as e:
                     import traceback
                     logger.error(f"Failed to apply ROI mask: {e}")
                     logger.error(traceback.format_exc())
                     frame_for_engine = frame
+                    has_roi = False
             else:
                 frame_for_engine = frame
+                has_roi = False
 
-            success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not success:
-                continue
-                
-            jpeg_bytes = jpeg_buf.tobytes()
-            rtsp_preview_frame = jpeg_bytes  # Always update latest GUI preview frame
-            
-            # Encode specifically for the engine (cropped if mask exists)
+            # Single JPEG encode: only the engine frame (the part that matters)
             success_eng, eng_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success_eng:
                 continue
             engine_bytes = eng_buf.tobytes()
+
+            # Preview updates: rate-limited to max 2 FPS (saves 1-2 full-frame JPEG encodes per analysis)
+            _now_preview = time.time()
+            if _now_preview - rtsp_status.get("_last_preview_time", 0) > 0.5:
+                rtsp_status["_last_preview_time"] = _now_preview
+                # Unmasked preview for ROI editor
+                s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if s_umb:
+                    rtsp_unmasked_preview_frame = b_umb.tobytes()
+                # Masked preview for live view
+                if has_roi:
+                    preview = cv2.bitwise_and(frame, frame, mask=rtsp_mask_cache["mask"])
+                    s_prev, b_prev = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if s_prev:
+                        rtsp_preview_frame = b_prev.tobytes()
+                else:
+                    rtsp_preview_frame = b_umb.tobytes() if s_umb else rtsp_preview_frame
             
             rtsp_status["frames_analyzed"] += 1
             rtsp_status["last_capture"] = datetime.utcnow().isoformat()
