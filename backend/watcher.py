@@ -870,6 +870,14 @@ def rtsp_processor_thread():
                 continue
 
             # --- Analysis starts here ---
+            _t0 = time.time()  # cycle start
+            _t_mask = 0
+            _t_enc = 0
+            _t_preview = 0
+            _t_engine = 0
+            _t_match = 0
+            _did_preview = False
+
             # ROI Masking (optimized: crop-first, then mask small region)
             polygon_str = _get_cached_polygon()  # cached, no DB query per frame
 
@@ -933,15 +941,21 @@ def rtsp_processor_thread():
                 frame_for_engine = frame
                 has_roi = False
 
+            _t_mask = time.time() - _t0
+
             # Single JPEG encode: only the engine frame (the part that matters)
+            _t_enc_start = time.time()
             success_eng, eng_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success_eng:
                 continue
             engine_bytes = eng_buf.tobytes()
+            _t_enc = time.time() - _t_enc_start
 
             # Preview updates: rate-limited to max 2 FPS (saves 1-2 full-frame JPEG encodes per analysis)
             _now_preview = time.time()
             if _now_preview - rtsp_status.get("_last_preview_time", 0) > 0.5:
+                _t_prev_start = time.time()
+                _did_preview = True
                 rtsp_status["_last_preview_time"] = _now_preview
                 # Unmasked preview for ROI editor
                 s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
@@ -955,6 +969,7 @@ def rtsp_processor_thread():
                         rtsp_preview_frame = b_prev.tobytes()
                 else:
                     rtsp_preview_frame = b_umb.tobytes() if s_umb else rtsp_preview_frame
+                _t_preview = time.time() - _t_prev_start
             
             rtsp_status["frames_analyzed"] += 1
             rtsp_status["last_capture"] = datetime.utcnow().isoformat()
@@ -970,6 +985,7 @@ def rtsp_processor_thread():
             analysis_start = time.time()
             result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
             analysis_duration = time.time() - analysis_start
+            _t_engine = analysis_duration
 
             plate = result.get("plate", "")
             confidence = result.get("confidence", 0.0)
@@ -991,7 +1007,9 @@ def rtsp_processor_thread():
 
             # Handle detection
             if is_real_plate:
+                _t_match_start = time.time()
                 matched_plate, match_score, decision = fuzzy_match_plate(plate)
+                _t_match = time.time() - _t_match_start
                 match_score_val = match_score if match_score is not None else 0.0
                 
                 # If no active session, start one
@@ -1135,11 +1153,26 @@ def rtsp_processor_thread():
                     "has_triggered": False
                 }
 
-            if mode == "seconds" and analysis_duration > val:
+            _t_total = time.time() - _t0
+            if mode == "seconds" and _t_total > val:
                 rtsp_status["backpressure"] = True
-                logger.warning(f"📹 RTSP: Analysis took {analysis_duration:.1f}s but interval is {val}s")
             else:
                 rtsp_status["backpressure"] = False
+
+            # Spike debug log: only fires when cycle exceeds 500ms — single compact line
+            if _t_total > 0.5:
+                _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
+                _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
+                parts = [
+                    f"SPIKE {int(_t_total*1000)}ms",
+                    f"mask={int(_t_mask*1000)}",
+                    f"enc={int(_t_enc*1000)}",
+                    f"prev={'%d' % int(_t_preview*1000) if _did_preview else '-'}",
+                    f"engine={_eng_ms}(net={_net_ms})",
+                    f"match={int(_t_match*1000)}",
+                    f"plate={plate or '-'}",
+                ]
+                logger.warning(f"📹 {' | '.join(parts)}")
 
         except Exception as e:
             logger.error(f"📹 RTSP Processor Error: {e}")
