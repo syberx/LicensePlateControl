@@ -231,8 +231,8 @@
             border-radius: 12px;
             padding: 1rem 1.25rem;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 0.6rem;
             transition: all 0.2s;
         }
 
@@ -249,18 +249,38 @@
             opacity: 0.6;
         }
 
-        .plate-info .plate-text {
-            font-size: 1.1rem;
+        .plate-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .plate-number {
+            font-size: 1.2rem;
             font-weight: 700;
             color: #fff;
-            letter-spacing: 1.5px;
+            letter-spacing: 2px;
             font-family: 'Inter', monospace;
         }
 
-        .plate-info .plate-desc {
-            font-size: 0.78rem;
-            color: rgba(255, 255, 255, 0.4);
-            margin-top: 0.15rem;
+        .plate-info {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .plate-stats {
+            display: flex;
+            gap: 1.5rem;
+            font-size: 0.75rem;
+        }
+
+        .stat-label {
+            display: block;
+            font-size: 0.6rem;
+            color: rgba(255, 255, 255, 0.35);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.2rem;
         }
 
         .plate-actions {
@@ -486,7 +506,7 @@
                     }
 
                     html += `
-                        <div class="plate-card">
+                        <div class="plate-card ${cls}">
                             <div class="plate-header">
                                 <div class="plate-number">${p.plate_text}</div>
                                 <div style="display: flex; gap: 0.5rem; align-items: center;">

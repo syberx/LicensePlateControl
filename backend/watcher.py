@@ -1207,13 +1207,14 @@ def rtsp_processor_thread():
             else:
                 rtsp_status["backpressure"] = False
 
-            # Spike debug log: only fires when cycle exceeds 80% of configured interval
-            _spike_thresh = (val * 0.8) if mode == "seconds" and val > 0 else 0.5
+            # Spike debug log: only fires when cycle actually exceeds the configured interval
+            # (i.e. system can't keep up). Previous 80% threshold caused constant false alarms.
+            _spike_thresh = val if mode == "seconds" and val > 0 else 2.0
             if _t_total > _spike_thresh:
                 _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
                 _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
                 parts = [
-                    f"SPIKE {int(_t_total*1000)}ms",
+                    f"SPIKE {int(_t_total*1000)}ms (limit {int(_spike_thresh*1000)}ms)",
                     f"mask={int(_t_mask*1000)}",
                     f"enc={int(_t_enc*1000)}",
                     f"prev={'%d' % int(_t_preview*1000) if _did_preview else '-'}",
