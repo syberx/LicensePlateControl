@@ -74,11 +74,6 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-    volumes:
-      - ./frontend/index.html:/usr/share/nginx/html/index.html:ro
-      - ./frontend/plates.html:/usr/share/nginx/html/plates.html:ro
-      - ./frontend/settings.html:/usr/share/nginx/html/settings.html:ro
-      - ./frontend/logs.html:/usr/share/nginx/html/logs.html:ro
     depends_on:
       - backend
     networks:
