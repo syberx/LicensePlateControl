@@ -51,6 +51,7 @@ class EventImageResponse(BaseModel):
     created_at: Optional[datetime.datetime] = None
     processing_time_ms: Optional[float] = None
     recognition_source: Optional[str] = None
+    has_crop: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -216,6 +217,16 @@ def get_image_from_db(image_id: int, db: Session = Depends(get_db)):
     media_type = "image/jpeg" if ext in ["jpg", "jpeg"] else "image/png"
     
     return Response(content=img.image_data, media_type=media_type)
+
+@router.get("/api/images/db/{image_id}/crop")
+def get_crop_from_db(image_id: int, db: Session = Depends(get_db)):
+    """Serve the cropped plate region for an EventImage."""
+    img = db.query(models.EventImage).filter(models.EventImage.id == image_id).first()
+    if not img:
+        raise HTTPException(status_code=404, detail="Image not found")
+    if not img.plate_crop_data:
+        raise HTTPException(status_code=404, detail="No plate crop available")
+    return Response(content=img.plate_crop_data, media_type="image/jpeg")
 
 @router.get("/api/images/{file_path:path}")
 def get_image(file_path: str):

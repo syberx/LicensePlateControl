@@ -365,6 +365,7 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
             is_trigger=is_trigger,
             processing_time_ms=result.get("processing_time_ms"),
             recognition_source=result.get("source", "fast_alpr"),
+            plate_crop_data=result.get("crop_jpeg"),
         )
         db.add(event_image)
         db.flush()
@@ -391,27 +392,34 @@ def process_first_image(folder_path: str, img_path: str):
     conf = result.get("confidence", 0.0)
     proc_time = result.get("processing_time_ms")
 
-    # Hybrid cascade: fast_alpr -> PaddleOCR
-    if rec_mode == "hybrid" and conf < cascade_settings["confidence_threshold"] and conf > 0:
-        logger.info(f"Hybrid Stage 2 (PaddleOCR) for first image — confidence {conf:.2f} < {cascade_settings['confidence_threshold']}")
+    proc_str = f" | {proc_time}ms" if proc_time else ""
+    logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
+
+    # Fuzzy match against DB
+    matched_plate, match_score, decision = fuzzy_match_plate(plate)
+    match_score_val = match_score if match_score is not None else 0.0
+
+    # Hybrid cascade: PaddleOCR fallback when fuzzy-match is poor (not just OCR confidence)
+    if rec_mode == "hybrid" and match_score_val < 0.80 and plate:
+        logger.info(f"Hybrid Stage 2 (PaddleOCR) for first image — match_score {match_score_val:.2f} < 0.80")
         try:
             with open(img_path, 'rb') as f:
                 jpeg_bytes = f.read()
             paddle_result = analyze_with_paddleocr(jpeg_bytes)
-            if paddle_result.get("confidence", 0) > conf:
-                logger.info(f"PaddleOCR improved: '{plate}' -> '{paddle_result['plate']}' ({paddle_result.get('confidence', 0):.2f})")
-                result = paddle_result
-                plate = result.get("plate", "")
-                conf = result.get("confidence", 0.0)
-                proc_time = result.get("processing_time_ms")
+            p_plate = paddle_result.get("plate", "")
+            if p_plate:
+                p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
+                p_score_val = p_score if p_score is not None else 0.0
+                logger.info(f"PaddleOCR: '{p_plate}' (match={p_score_val:.2f}) vs fast_alpr: '{plate}' (match={match_score_val:.2f})")
+                if p_score_val > match_score_val:
+                    logger.info(f"PaddleOCR wins! '{plate}' -> '{p_plate}'")
+                    result = paddle_result
+                    plate = result.get("plate", "")
+                    conf = result.get("confidence", 0.0)
+                    proc_time = result.get("processing_time_ms")
+                    matched_plate, match_score, decision = p_matched, p_score, p_decision
         except Exception as e:
             logger.error(f"PaddleOCR fallback error: {e}")
-
-    proc_str = f" | {proc_time}ms" if proc_time else ""
-    logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
-    
-    # Fuzzy match against DB
-    matched_plate, match_score, decision = fuzzy_match_plate(plate)
     
     # Trigger integrations if allowed
     db = SessionLocal()
@@ -546,11 +554,15 @@ def process_followup_images(folder_path: str):
             best_plate = plate
             best_conf = conf
 
-    # Hybrid cascade: PaddleOCR fallback (only if fast_alpr confidence is low)
-    if rec_mode == "hybrid" and best_conf < cascade_settings["confidence_threshold"] and best_conf > 0:
-        logger.info(f"Hybrid Stage 2 (PaddleOCR) for follow-up batch — confidence {best_conf:.2f}")
+    # Fuzzy match the best fast_alpr result
+    matched_plate_batch, match_score_batch, decision_batch = fuzzy_match_plate(best_plate)
+    match_score_batch_val = match_score_batch if match_score_batch is not None else 0.0
+
+    # Hybrid cascade: PaddleOCR fallback when fuzzy-match is poor
+    if rec_mode == "hybrid" and match_score_batch_val < 0.80 and best_plate:
+        logger.info(f"Hybrid Stage 2 (PaddleOCR) for follow-up batch — match_score {match_score_batch_val:.2f} < 0.80")
         try:
-            best_img_path = image_results[0][0]  # First image
+            best_img_path = image_results[0][0]
             for img_path, res in image_results:
                 if res.get("confidence", 0) > 0:
                     best_img_path = img_path
@@ -559,10 +571,16 @@ def process_followup_images(folder_path: str):
                 with open(best_img_path, 'rb') as f:
                     paddle_bytes = f.read()
                 paddle_result = analyze_with_paddleocr(paddle_bytes)
-                if paddle_result.get("confidence", 0) > best_conf:
-                    best_plate = paddle_result["plate"]
-                    best_conf = paddle_result["confidence"]
-                    logger.info(f"PaddleOCR improved follow-up: '{best_plate}' ({best_conf:.2f})")
+                p_plate = paddle_result.get("plate", "")
+                if p_plate:
+                    p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
+                    p_score_val = p_score if p_score is not None else 0.0
+                    logger.info(f"PaddleOCR: '{p_plate}' (match={p_score_val:.2f}) vs fast_alpr: '{best_plate}' (match={match_score_batch_val:.2f})")
+                    if p_score_val > match_score_batch_val:
+                        best_plate = paddle_result["plate"]
+                        best_conf = paddle_result["confidence"]
+                        matched_plate_batch, match_score_batch, decision_batch = p_matched, p_score, p_decision
+                        logger.info(f"PaddleOCR wins follow-up: '{best_plate}' (match={p_score_val:.2f})")
         except Exception as e:
             logger.error(f"PaddleOCR fallback error: {e}")
 
@@ -786,7 +804,10 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
         debug_frame_buffer.popleft()
 
 def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
-    """Send JPEG bytes to the engine API and return the best plate result."""
+    """Send JPEG bytes to the engine API and return the best plate result.
+
+    Returns dict with keys: plate, confidence, processing_time_ms, source, crop_jpeg (optional bytes)
+    """
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
         response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
@@ -800,6 +821,13 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
                     best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
+                    # Decode plate crop if engine returned one
+                    crop_b64 = res.get("crop_b64")
+                    if crop_b64:
+                        import base64
+                        best["crop_jpeg"] = base64.b64decode(crop_b64)
+                    else:
+                        best["crop_jpeg"] = None
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for RTSP frame")
@@ -1245,7 +1273,7 @@ def rtsp_processor_thread():
                     rtsp_active_session["decision"] = decision
                     rtsp_active_session["has_triggered"] = False
                     rtsp_active_session["trigger_timestamp"] = None
-                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}'")
+                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}' (conf={confidence:.2f}, mode={rec_mode})")
                 else:
                     # Update active session timer
                     rtsp_active_session["last_seen_time"] = now_str
@@ -1275,6 +1303,7 @@ def rtsp_processor_thread():
                     "proc_ms": proc_ms,
                     "has_plate": True,
                     "source": result.get("source", "fast_alpr"),
+                    "crop_jpeg": result.get("crop_jpeg"),
                 })
                 
                 rtsp_status["state"] = "connected"
@@ -1315,18 +1344,34 @@ def rtsp_processor_thread():
                 s_imgs = rtsp_active_session["images"]
 
                 # --- HYBRID CASCADE: PaddleOCR fallback ---
-                if rec_mode == "hybrid" and s_conf < cascade_settings["confidence_threshold"]:
-                    plate_frames = [img["jpeg_bytes"] for img in s_imgs if img.get("has_plate")]
-                    all_frames = [img["jpeg_bytes"] for img in s_imgs]
-                    best_frame = (plate_frames or all_frames)[0] if (plate_frames or all_frames) else None
+                # Smart trigger: use fuzzy-match score, not OCR confidence.
+                # If fast_alpr can't match a known plate (score < 0.80), PaddleOCR gets a chance.
+                s_match_before = rtsp_active_session.get("best_match_score", 0.0)
+                needs_paddle = rec_mode == "hybrid" and s_match_before < 0.80
+                logger.info(f"📹 RTSP: Finalize — mode={rec_mode}, plate='{s_plate}', conf={s_conf:.2f}, match={s_match_before:.2f}, paddle={'YES' if needs_paddle else 'skip'}")
+
+                if needs_paddle:
+                    plate_frames = [img for img in s_imgs if img.get("has_plate")]
+                    # Sort by confidence desc — try best frame first
+                    plate_frames.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+                    best_frame = plate_frames[0]["jpeg_bytes"] if plate_frames else (s_imgs[0]["jpeg_bytes"] if s_imgs else None)
 
                     if best_frame:
-                        logger.info(f"📹 RTSP: Hybrid Stage 2 (PaddleOCR) — confidence {s_conf:.2f}")
+                        logger.info(f"📹 RTSP: Hybrid Stage 2 (PaddleOCR) — fast_alpr match only {s_match_before:.2f}")
                         paddle_result = analyze_with_paddleocr(best_frame)
-                        if paddle_result.get("plate") and paddle_result.get("confidence", 0) > s_conf:
-                            logger.info(f"📹 RTSP: PaddleOCR improved: '{s_plate}' -> '{paddle_result['plate']}' ({paddle_result['confidence']:.2f})")
-                            s_plate = paddle_result["plate"]
-                            s_conf = paddle_result["confidence"]
+                        p_plate = paddle_result.get("plate", "")
+                        p_conf = paddle_result.get("confidence", 0.0)
+
+                        if p_plate:
+                            # Check if PaddleOCR result fuzzy-matches better
+                            p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
+                            p_score_val = p_score if p_score is not None else 0.0
+                            logger.info(f"📹 RTSP: PaddleOCR result: '{p_plate}' (conf={p_conf:.2f}, match={p_score_val:.2f}) vs fast_alpr: '{s_plate}' (match={s_match_before:.2f})")
+
+                            if p_score_val > s_match_before:
+                                logger.info(f"📹 RTSP: PaddleOCR wins! '{s_plate}' -> '{p_plate}' (match {s_match_before:.2f} -> {p_score_val:.2f})")
+                                s_plate = apply_corrections(p_plate)
+                                s_conf = p_conf
 
                 # Re-do match just to be safe it's correct for the final selected plate
                 s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)
@@ -1367,6 +1412,7 @@ def rtsp_processor_thread():
                             is_trigger=(i == 0),
                             processing_time_ms=img_data["proc_ms"],
                             recognition_source=img_data.get("source", "fast_alpr"),
+                            plate_crop_data=img_data.get("crop_jpeg"),
                         )
                         db.add(event_image)
                     

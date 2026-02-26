@@ -50,8 +50,13 @@ class EventImage(Base):
     created_at = Column(DateTime, default=datetime.datetime.now)
     processing_time_ms = Column(Float, nullable=True)
     recognition_source = Column(String, nullable=True)  # fast_alpr | paddleocr | vision_llm
+    plate_crop_data = Column(LargeBinary, nullable=True)  # Cropped plate region from YOLO detection
 
     event = relationship("Event", back_populates="images")
+
+    @property
+    def has_crop(self) -> bool:
+        return self.plate_crop_data is not None
 
 class Setting(Base):
     __tablename__ = "settings"
