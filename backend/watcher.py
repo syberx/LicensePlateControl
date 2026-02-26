@@ -7,6 +7,7 @@ from collections import deque
 import requests
 import re
 import uuid
+import base64
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from database import SessionLocal
@@ -379,12 +380,42 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
 def process_first_image(folder_path: str, img_path: str):
     """FAST-FIRST: Process the first image immediately, create event, trigger HA if needed."""
     logger.info(f"⚡ FAST-FIRST: Processing {os.path.basename(img_path)} immediately")
-    
-    result = process_single_image(img_path)
+
+    vlm_settings = _get_cached_vision_settings()
+    rec_mode = vlm_settings["recognition_mode"]
+
+    if rec_mode == "vision_llm":
+        # Pure Vision LLM mode: read the file and send to Ollama
+        try:
+            with open(img_path, 'rb') as f:
+                jpeg_bytes = f.read()
+            result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
+        except Exception as e:
+            logger.error(f"Vision LLM file read error: {e}")
+            result = {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+    else:
+        result = process_single_image(img_path)
+
     plate = result.get("plate", "")
     conf = result.get("confidence", 0.0)
     proc_time = result.get("processing_time_ms")
-    
+
+    # Hybrid fallback: if fast_alpr confidence is low, try Vision LLM
+    if rec_mode == "hybrid" and conf < vlm_settings["vision_llm_confidence_threshold"] and conf > 0:
+        logger.info(f"Hybrid fallback for first image — confidence {conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}")
+        try:
+            with open(img_path, 'rb') as f:
+                jpeg_bytes = f.read()
+            vlm_result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
+            if vlm_result.get("confidence", 0) > conf:
+                logger.info(f"Vision LLM improved: '{plate}' -> '{vlm_result['plate']}'")
+                result = vlm_result
+                plate = result.get("plate", "")
+                conf = result.get("confidence", 0.0)
+                proc_time = result.get("processing_time_ms")
+        except Exception as e:
+            logger.error(f"Hybrid Vision LLM fallback error: {e}")
+
     proc_str = f" | {proc_time}ms" if proc_time else ""
     logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
     
@@ -506,20 +537,50 @@ def process_followup_images(folder_path: str):
     best_conf = series["best_confidence"]
     
     # Store per-image results for DB insertion
+    vlm_settings = _get_cached_vision_settings()
+    rec_mode = vlm_settings["recognition_mode"]
+
     image_results = []
     for img_path in process_list:
-        result = process_single_image(img_path)
+        if rec_mode == "vision_llm":
+            try:
+                with open(img_path, 'rb') as f:
+                    jpeg_bytes = f.read()
+                result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
+            except Exception as e:
+                logger.error(f"Vision LLM file read error: {e}")
+                result = {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+        else:
+            result = process_single_image(img_path)
         plate = result.get("plate", "")
         conf = result.get("confidence", 0.0)
         proc_time = result.get("processing_time_ms")
         proc_str = f" | {proc_time}ms" if proc_time else ""
         logger.info(f"  [{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
         image_results.append((img_path, result))
-        
+
         if conf > best_conf and plate:
             best_plate = plate
             best_conf = conf
-    
+
+    # Hybrid fallback: if best confidence is still low, try Vision LLM with best frames
+    if rec_mode == "hybrid" and best_conf < vlm_settings["vision_llm_confidence_threshold"] and best_conf > 0:
+        logger.info(f"Hybrid fallback for follow-up batch — confidence {best_conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}")
+        try:
+            llm_frames = []
+            for img_path, result in image_results[:3]:
+                if os.path.exists(img_path):
+                    with open(img_path, 'rb') as f:
+                        llm_frames.append(f.read())
+            if llm_frames:
+                vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
+                if vlm_result.get("confidence", 0) > best_conf:
+                    best_plate = vlm_result["plate"]
+                    best_conf = vlm_result["confidence"]
+                    logger.info(f"Vision LLM improved follow-up: '{best_plate}' ({best_conf:.2f})")
+        except Exception as e:
+            logger.error(f"Hybrid Vision LLM fallback error: {e}")
+
     # Re-check fuzzy match with the improved plate
     matched_plate, match_score, decision = fuzzy_match_plate(best_plate)
     
@@ -759,6 +820,160 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
     except Exception as e:
         logger.error(f"RTSP engine analysis error: {e}")
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+
+
+# --- Vision LLM Integration (Ollama) ---
+
+_VISION_LLM_PROMPT = (
+    "Look at this image of a vehicle or license plate. "
+    "Read the license plate number exactly as shown. "
+    "Return ONLY the plate text (letters and numbers), nothing else. "
+    "If you cannot read the plate, return UNKNOWN. "
+    "Example response: MK MS 255"
+)
+
+_VISION_LLM_MULTI_PROMPT = (
+    "These images show the same vehicle from a camera. "
+    "Read the license plate number from these images. "
+    "Combine information from all images for the best reading. "
+    "Return ONLY the plate text (letters and numbers), nothing else. "
+    "If you cannot read the plate, return UNKNOWN. "
+    "Example response: MK MS 255"
+)
+
+def _get_vision_llm_settings():
+    """Read Vision LLM settings from DB with defaults."""
+    db = SessionLocal()
+    try:
+        return {
+            "recognition_mode": get_setting(db, "recognition_mode", "fast_alpr"),
+            "vision_llm_url": get_setting(db, "vision_llm_url", "http://host.docker.internal:11434"),
+            "vision_llm_model": get_setting(db, "vision_llm_model", "moondream"),
+            "vision_llm_confidence_threshold": float(get_setting(db, "vision_llm_confidence_threshold", "0.6")),
+        }
+    finally:
+        db.close()
+
+# Cache for vision LLM settings (refreshed every 10 seconds)
+_vision_llm_cache = {"settings": None, "last_check": 0.0}
+_VISION_LLM_CACHE_TTL = 10.0
+
+def _get_cached_vision_settings():
+    """Return cached Vision LLM settings, refreshing from DB at most every 10 seconds."""
+    now = time.time()
+    if now - _vision_llm_cache["last_check"] > _VISION_LLM_CACHE_TTL or _vision_llm_cache["settings"] is None:
+        _vision_llm_cache["settings"] = _get_vision_llm_settings()
+        _vision_llm_cache["last_check"] = now
+    return _vision_llm_cache["settings"]
+
+
+def analyze_with_vision_llm(jpeg_frames: list, settings: dict = None) -> dict:
+    """Send one or more JPEG frames to a Vision LLM (Ollama) for plate recognition.
+
+    Args:
+        jpeg_frames: List of JPEG byte buffers (1-3 frames recommended)
+        settings: Vision LLM settings dict (if None, reads from cache)
+
+    Returns:
+        {"plate": str, "confidence": float, "processing_time_ms": float, "source": "vision_llm"}
+    """
+    if not settings:
+        settings = _get_cached_vision_settings()
+
+    ollama_url = settings["vision_llm_url"].rstrip("/")
+    model = settings["vision_llm_model"]
+
+    # Encode frames as base64
+    b64_images = []
+    for frame_bytes in jpeg_frames[:3]:  # Max 3 frames
+        b64_images.append(base64.b64encode(frame_bytes).decode("utf-8"))
+
+    prompt = _VISION_LLM_MULTI_PROMPT if len(b64_images) > 1 else _VISION_LLM_PROMPT
+
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": prompt,
+            "images": b64_images,
+        }],
+        "stream": False,
+        "options": {
+            "temperature": 0.1,  # Low temperature for deterministic output
+            "num_predict": 30,   # Plate text is short
+        }
+    }
+
+    start_time = time.time()
+    try:
+        response = requests.post(
+            f"{ollama_url}/api/chat",
+            json=payload,
+            timeout=30,  # Vision LLMs can be slow
+        )
+        processing_time_ms = (time.time() - start_time) * 1000.0
+
+        if response.status_code == 200:
+            data = response.json()
+            raw_text = data.get("message", {}).get("content", "").strip()
+
+            # Clean up the LLM response — extract only plate-like text
+            plate_text = _extract_plate_from_llm_response(raw_text)
+
+            if plate_text and plate_text != "UNKNOWN":
+                plate_text = apply_corrections(plate_text)
+                logger.info(f"Vision LLM ({model}): raw='{raw_text}' -> plate='{plate_text}' ({processing_time_ms:.0f}ms, {len(b64_images)} frames)")
+                return {
+                    "plate": plate_text,
+                    "confidence": 0.85,  # Vision LLM doesn't give numeric confidence; use a fixed high value
+                    "processing_time_ms": processing_time_ms,
+                    "source": "vision_llm",
+                }
+            else:
+                logger.info(f"Vision LLM ({model}): no plate found, raw='{raw_text}' ({processing_time_ms:.0f}ms)")
+                return {
+                    "plate": "UNKNOWN",
+                    "confidence": 0.0,
+                    "processing_time_ms": processing_time_ms,
+                    "source": "vision_llm",
+                }
+        else:
+            logger.error(f"Vision LLM API error {response.status_code}: {response.text[:200]}")
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Vision LLM: Cannot connect to {ollama_url} — is Ollama running?")
+    except requests.exceptions.Timeout:
+        logger.error(f"Vision LLM: Request timed out after 30s")
+    except Exception as e:
+        logger.error(f"Vision LLM error: {e}")
+
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "vision_llm"}
+
+
+def _extract_plate_from_llm_response(raw_text: str) -> str:
+    """Extract a license plate string from potentially chatty LLM output.
+    The LLM might return 'The plate reads MK MS 255' instead of just 'MK MS 255'.
+    """
+    if not raw_text:
+        return "UNKNOWN"
+
+    text = raw_text.strip().upper()
+
+    # If the response is already short and clean, use it directly
+    cleaned = re.sub(r'[^A-ZÄÖÜ0-9]', '', text)
+    if 4 <= len(cleaned) <= 12:
+        return cleaned
+
+    # Try to find a plate-like pattern in longer text
+    # German plates: 1-3 letters, 1-2 letters, 1-4 digits, optional E/H
+    match = re.search(r'([A-ZÄÖÜ]{1,3})\s*[-–]?\s*([A-Z]{1,2})\s*[-–]?\s*(\d{1,4})\s*([EH]?)', text)
+    if match:
+        return f"{match.group(1)}{match.group(2)}{match.group(3)}{match.group(4)}"
+
+    # Fallback: just strip non-alphanumeric and hope for the best
+    if 4 <= len(cleaned) <= 12:
+        return cleaned
+
+    return "UNKNOWN"
 
 
 rtsp_latest_frame_data = None
@@ -1030,8 +1245,17 @@ def rtsp_processor_thread():
                 elapsed = capture_times[-1] - capture_times[0]
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
+            # --- Recognition mode selection ---
+            vlm_settings = _get_cached_vision_settings()
+            rec_mode = vlm_settings["recognition_mode"]
+
             analysis_start = time.time()
-            result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
+            if rec_mode == "vision_llm":
+                # Pure Vision LLM mode: skip fast_alpr entirely
+                result = analyze_with_vision_llm([engine_bytes], vlm_settings)
+            else:
+                # fast_alpr or hybrid: use engine first (hybrid fallback at session finalization)
+                result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
             analysis_duration = time.time() - analysis_start
             _t_engine = analysis_duration
 
@@ -1137,10 +1361,27 @@ def rtsp_processor_thread():
                 s_conf = rtsp_active_session["best_conf"]
                 s_dec = rtsp_active_session["decision"]
                 s_imgs = rtsp_active_session["images"]
-                
+
+                # --- HYBRID MODE: Vision LLM fallback on low confidence ---
+                if rec_mode == "hybrid" and s_conf < vlm_settings["vision_llm_confidence_threshold"]:
+                    logger.info(f"📹 RTSP: Hybrid fallback — confidence {s_conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}, trying Vision LLM...")
+                    # Pick best 2-3 frames (prefer those with plate detections)
+                    plate_frames = [img["jpeg_bytes"] for img in s_imgs if img.get("has_plate")]
+                    all_frames = [img["jpeg_bytes"] for img in s_imgs]
+                    llm_frames = (plate_frames or all_frames)[:3]
+
+                    if llm_frames:
+                        vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
+                        vlm_plate = vlm_result.get("plate", "")
+                        vlm_conf = vlm_result.get("confidence", 0.0)
+                        if vlm_plate and vlm_plate != "UNKNOWN" and vlm_conf > s_conf:
+                            logger.info(f"📹 RTSP: Vision LLM improved plate: '{s_plate}' ({s_conf:.2f}) -> '{vlm_plate}' ({vlm_conf:.2f})")
+                            s_plate = vlm_plate
+                            s_conf = vlm_conf
+
                 # Re-do match just to be safe it's correct for the final selected plate
                 s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)
-                
+
                 logger.info(f"📹 RTSP: Finalizing session for '{s_plate}' after 20s timeout. {len(s_imgs)} frames collected.")
                 
                 rtsp_status["detections"] += 1
