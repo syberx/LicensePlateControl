@@ -536,21 +536,20 @@
                                 <select id="recognition_mode" class="form-input"
                                     style="background: rgba(255,255,255,0.06); color: #e0e0e0; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem; border-radius: 8px;">
                                     <option value="fast_alpr">Fast ALPR (Standard — YOLO + OCR)</option>
-                                    <option value="hybrid">Hybrid (Fast ALPR + Vision-LLM bei Unsicherheit)</option>
-                                    <option value="vision_llm">Nur Vision-LLM (langsamer, aber genauer)</option>
+                                    <option value="hybrid">Hybrid (Fast ALPR + LLM-Fallback bei Unsicherheit)</option>
                                 </select>
                                 <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
-                                    <strong>Fast ALPR:</strong> Schnell (~50ms), YOLO-Erkennung + CCT-OCR.<br>
-                                    <strong>Hybrid:</strong> Fast ALPR zuerst, bei niedriger Confidence werden 2-3 Frames
-                                    an das Vision-LLM geschickt.<br>
-                                    <strong>Nur Vision-LLM:</strong> Jeder Frame wird vom Vision-LLM analysiert (1-5s pro Frame).
+                                    <strong>Fast ALPR:</strong> Schnell (~50ms), YOLO-Erkennung + CCT-OCR. Kein LLM nötig.<br>
+                                    <strong>Hybrid:</strong> Fast ALPR zuerst. Nur wenn die Confidence unter dem
+                                    Schwellwert liegt, werden 2-3 Frames an ein kleines Vision-LLM (moondream, ~1.7 GB)
+                                    geschickt. Das LLM wird also selten aufgerufen und nur als Fallback.
                                 </p>
                             </div>
 
                             <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
                                 <h3>Vision-LLM Einstellungen (Ollama)</h3>
-                                <p class="desc">Verbindung zum lokal gehosteten Vision-LLM. Ollama muss separat
-                                    installiert und gestartet sein.</p>
+                                <p class="desc">Ollama läuft als Docker-Container im selben Stack.
+                                    Nur relevant wenn der Hybrid-Modus aktiv ist.</p>
 
                                 <div class="form-group" style="margin-top: 1.5rem;">
                                     <label class="form-label">Ollama URL</label>
@@ -569,10 +568,10 @@
                                     <input type="text" id="vision_llm_model" class="form-input"
                                         placeholder="moondream">
                                     <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
-                                        Empfohlene Modelle:
-                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">moondream</code> (1.8B, schnell),
-                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">llava</code> (7B, genau),
-                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">minicpm-v</code> (3B, guter Kompromiss).
+                                        Empfohlen:
+                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">moondream</code> (1.8B, ~1.7 GB RAM) —
+                                        klein genug für CPU-only, reicht für Kennzeichen völlig aus.
+                                        Wird beim ersten Aufruf automatisch heruntergeladen.
                                     </p>
                                 </div>
 

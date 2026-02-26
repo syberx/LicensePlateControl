@@ -646,10 +646,8 @@
                             </div>
                             <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px; display: flex; align-items: center; gap: 0.5rem;">
                                 📸 <span x-text="e.image_count"></span>
-                                <template x-if="e.recognition_source && e.recognition_source !== 'fast_alpr'">
-                                    <span style="padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600;"
-                                        :style="e.recognition_source === 'hybrid' ? 'background: rgba(192,132,252,0.2); color: #c084fc;' : 'background: rgba(244,114,182,0.2); color: #f472b6;'"
-                                        x-text="e.recognition_source === 'hybrid' ? 'HYBRID' : 'VLM'"></span>
+                                <template x-if="e.recognition_source === 'hybrid'">
+                                    <span style="padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; background: rgba(192,132,252,0.2); color: #c084fc;">HYBRID</span>
                                 </template>
                                 <span style="margin-left: auto;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
                             </div>

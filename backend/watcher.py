@@ -385,18 +385,10 @@ def process_first_image(folder_path: str, img_path: str):
 
     vlm_settings = _get_cached_vision_settings()
     rec_mode = vlm_settings["recognition_mode"]
-
     if rec_mode == "vision_llm":
-        # Pure Vision LLM mode: read the file and send to Ollama
-        try:
-            with open(img_path, 'rb') as f:
-                jpeg_bytes = f.read()
-            result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
-        except Exception as e:
-            logger.error(f"Vision LLM file read error: {e}")
-            result = {"plate": "", "confidence": 0.0, "processing_time_ms": None}
-    else:
-        result = process_single_image(img_path)
+        rec_mode = "hybrid"
+
+    result = process_single_image(img_path)
 
     plate = result.get("plate", "")
     conf = result.get("confidence", 0.0)
@@ -543,19 +535,12 @@ def process_followup_images(folder_path: str):
     # Store per-image results for DB insertion
     vlm_settings = _get_cached_vision_settings()
     rec_mode = vlm_settings["recognition_mode"]
+    if rec_mode == "vision_llm":
+        rec_mode = "hybrid"
 
     image_results = []
     for img_path in process_list:
-        if rec_mode == "vision_llm":
-            try:
-                with open(img_path, 'rb') as f:
-                    jpeg_bytes = f.read()
-                result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
-            except Exception as e:
-                logger.error(f"Vision LLM file read error: {e}")
-                result = {"plate": "", "confidence": 0.0, "processing_time_ms": None}
-        else:
-            result = process_single_image(img_path)
+        result = process_single_image(img_path)
         plate = result.get("plate", "")
         conf = result.get("confidence", 0.0)
         proc_time = result.get("processing_time_ms")
@@ -954,6 +939,39 @@ def analyze_with_vision_llm(jpeg_frames: list, settings: dict = None) -> dict:
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "vision_llm"}
 
 
+def _ensure_ollama_model():
+    """Pull the configured model if it's not already available in Ollama.
+    Called once at startup in a background thread so it doesn't block."""
+    try:
+        settings = _get_vision_llm_settings()
+        if settings["recognition_mode"] == "fast_alpr":
+            return  # No VLM needed
+        ollama_url = settings["vision_llm_url"].rstrip("/")
+        model = settings["vision_llm_model"]
+        # Check if model exists
+        resp = requests.get(f"{ollama_url}/api/tags", timeout=10)
+        if resp.status_code == 200:
+            models = [m["name"].split(":")[0] for m in resp.json().get("models", [])]
+            if model.split(":")[0] in models:
+                logger.info(f"Ollama model '{model}' already available.")
+                return
+        # Pull model
+        logger.info(f"Pulling Ollama model '{model}' (this may take a few minutes on first run)...")
+        pull_resp = requests.post(
+            f"{ollama_url}/api/pull",
+            json={"name": model, "stream": False},
+            timeout=600,  # Large timeout for first pull
+        )
+        if pull_resp.status_code == 200:
+            logger.info(f"Ollama model '{model}' pulled successfully.")
+        else:
+            logger.warning(f"Ollama pull returned {pull_resp.status_code}: {pull_resp.text[:200]}")
+    except requests.exceptions.ConnectionError:
+        logger.warning("Ollama not reachable — model pull skipped. Will retry when needed.")
+    except Exception as e:
+        logger.warning(f"Ollama model pull check failed: {e}")
+
+
 def _extract_plate_from_llm_response(raw_text: str) -> str:
     """Extract a license plate string from potentially chatty LLM output.
     The LLM might return 'The plate reads MK MS 255' instead of just 'MK MS 255'.
@@ -1253,15 +1271,14 @@ def rtsp_processor_thread():
             # --- Recognition mode selection ---
             vlm_settings = _get_cached_vision_settings()
             rec_mode = vlm_settings["recognition_mode"]
+            # "vision_llm" pure mode removed — treat as "hybrid" (VLM only as fallback)
+            if rec_mode == "vision_llm":
+                rec_mode = "hybrid"
             rtsp_status["recognition_mode"] = rec_mode
 
             analysis_start = time.time()
-            if rec_mode == "vision_llm":
-                # Pure Vision LLM mode: skip fast_alpr entirely
-                result = analyze_with_vision_llm([engine_bytes], vlm_settings)
-            else:
-                # fast_alpr or hybrid: use engine first (hybrid fallback at session finalization)
-                result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
+            # Always use fast_alpr first; hybrid fallback happens at session finalization
+            result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
             analysis_duration = time.time() - analysis_start
             _t_engine = analysis_duration
 
@@ -1691,6 +1708,10 @@ def start_watcher():
             for series_imgs in series_groups:
                 process_startup_series(folder_path, series_imgs)
     
+    # Ensure Ollama model is available (background, non-blocking)
+    ollama_pull_thread = threading.Thread(target=_ensure_ollama_model, daemon=True)
+    ollama_pull_thread.start()
+
     # Start series expiry and cleanup background threads
     expiry_thread = threading.Thread(target=check_series_expiry, daemon=True)
     expiry_thread.start()

@@ -68,6 +68,9 @@ services:
     networks:
       - lpc-network
 
+  # Optional: Vision-LLM Fallback via Ollama (nur für Hybrid-Modus)
+  # Nutzt moondream (1.8B, ~1.7 GB RAM) — läuft auch ohne GPU rein auf CPU.
+  # Wird NUR aufgerufen wenn Fast ALPR unsicher ist (Hybrid-Modus in Settings).
   ollama:
     image: ollama/ollama:latest
     container_name: licenseplatecontrol-ollama
@@ -79,11 +82,12 @@ services:
     environment:
       - TZ=Europe/Berlin
       - OLLAMA_HOST=0.0.0.0
-    # GPU passthrough (Intel iGPU) — Ollama nutzt diese automatisch wenn verfügbar
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - "992"   # render group GID
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+    deploy:
+      resources:
+        limits:
+          memory: 3G    # moondream braucht ~1.7 GB, Limit auf 3 GB
     networks:
       - lpc-network
 
