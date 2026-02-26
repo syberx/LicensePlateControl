@@ -555,10 +555,12 @@
                                 <div class="form-group" style="margin-top: 1.5rem;">
                                     <label class="form-label">Ollama URL</label>
                                     <input type="text" id="vision_llm_url" class="form-input"
-                                        placeholder="http://host.docker.internal:11434">
+                                        placeholder="http://ollama:11434">
                                     <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Standard:
+                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">http://ollama:11434</code>
+                                        (Ollama Docker-Container im selben Netzwerk). Oder
                                         <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">http://host.docker.internal:11434</code>
-                                        (Ollama auf dem Host-System).
+                                        falls Ollama nativ auf dem Host läuft.
                                     </p>
                                 </div>
 
@@ -1053,7 +1055,7 @@
                 async testConnection() {
                     this.testResult = 'Teste Verbindung...';
                     this.testOk = false;
-                    const url = (document.getElementById('vision_llm_url').value || 'http://host.docker.internal:11434').replace(/\/$/, '');
+                    const url = (document.getElementById('vision_llm_url').value || 'http://ollama:11434').replace(/\/$/, '');
                     const model = document.getElementById('vision_llm_model').value || 'moondream';
                     try {
                         // First: check if Ollama is reachable (via backend proxy to avoid CORS)

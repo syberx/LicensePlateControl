@@ -847,7 +847,7 @@ def _get_vision_llm_settings():
     try:
         return {
             "recognition_mode": get_setting(db, "recognition_mode", "fast_alpr"),
-            "vision_llm_url": get_setting(db, "vision_llm_url", "http://host.docker.internal:11434"),
+            "vision_llm_url": get_setting(db, "vision_llm_url", os.getenv("OLLAMA_URL", "http://ollama:11434")),
             "vision_llm_model": get_setting(db, "vision_llm_model", "moondream"),
             "vision_llm_confidence_threshold": float(get_setting(db, "vision_llm_confidence_threshold", "0.6")),
         }

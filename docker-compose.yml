@@ -35,9 +35,11 @@ services:
       - HA_URL=http://homeassistant.local:8123
       - HA_TOKEN=optional_long_lived_access_token
       - HA_SERVICE=/api/services/cover/open_cover
+      - OLLAMA_URL=http://ollama:11434
     depends_on:
       - engine
       - postgres
+      - ollama
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -66,6 +68,25 @@ services:
     networks:
       - lpc-network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: licenseplatecontrol-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - TZ=Europe/Berlin
+      - OLLAMA_HOST=0.0.0.0
+    # GPU passthrough (Intel iGPU) — Ollama nutzt diese automatisch wenn verfügbar
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "992"   # render group GID
+    networks:
+      - lpc-network
+
   frontend:
     build:
       context: ./frontend
@@ -86,6 +107,7 @@ services:
 
 volumes:
   pgdata:
+  ollama_data:
 
 
 networks:
