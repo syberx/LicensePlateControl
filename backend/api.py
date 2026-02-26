@@ -50,6 +50,7 @@ class EventImageResponse(BaseModel):
     is_trigger: bool = False
     created_at: Optional[datetime.datetime] = None
     processing_time_ms: Optional[float] = None
+    recognition_source: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +69,8 @@ class EventResponse(BaseModel):
     mqtt_triggered: Optional[bool] = False
     trigger_timestamp: Optional[datetime.datetime] = None
     processing_time_ms: Optional[float] = None
+    recognition_source: Optional[str] = None
+    vlm_processing_time_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 

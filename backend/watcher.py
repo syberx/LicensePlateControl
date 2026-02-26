@@ -249,22 +249,23 @@ def process_single_image(img_path: str) -> dict:
             results = data.get("results", [])
             processing_time_ms = data.get("processing_time_ms")
             
-            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms}
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
             for res in results:
                 plate_text = apply_corrections(res.get("plate", ""))
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
                     best = {
-                        "plate": plate_text, 
+                        "plate": plate_text,
                         "confidence": conf,
-                        "processing_time_ms": processing_time_ms
+                        "processing_time_ms": processing_time_ms,
+                        "source": "fast_alpr",
                     }
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for {img_path}")
     except Exception as e:
         logger.error(f"Error processing {img_path}: {e}")
-    return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
 
 def get_setting(db, key: str, default: str) -> str:
     s = db.query(models.Setting).filter(models.Setting.key == key).first()
@@ -363,7 +364,8 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
             confidence=conf if has_plate else None,
             has_plate=has_plate,
             is_trigger=is_trigger,
-            processing_time_ms=result.get("processing_time_ms")
+            processing_time_ms=result.get("processing_time_ms"),
+            recognition_source=result.get("source", "fast_alpr"),
         )
         db.add(event_image)
         db.flush()
@@ -456,7 +458,9 @@ def process_first_image(folder_path: str, img_path: str):
             ha_triggered=ha_triggered,
             mqtt_triggered=mqtt_triggered,
             trigger_timestamp=trigger_ts,
-            processing_time_ms=result.get("processing_time_ms")
+            processing_time_ms=result.get("processing_time_ms"),
+            recognition_source=rec_mode,
+            vlm_processing_time_ms=result.get("processing_time_ms") if result.get("source") == "vision_llm" else None,
         )
         db.add(new_event)
         db.flush()  # Get the ID without committing
@@ -724,6 +728,7 @@ rtsp_status = {
     "interval_mode": "seconds",
     "interval_value": 3,
     "backpressure": False,         # True if analysis takes longer than interval
+    "recognition_mode": "fast_alpr",  # Current recognition mode
 }
 
 # Used to group identical vehicles into a single event instead of repeating DB writes
@@ -808,18 +813,18 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
             data = response.json()
             results = data.get("results", [])
             processing_time_ms = data.get("processing_time_ms")
-            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms}
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
             for res in results:
                 plate_text = apply_corrections(res.get("plate", ""))
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
-                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms}
+                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for RTSP frame")
     except Exception as e:
         logger.error(f"RTSP engine analysis error: {e}")
-    return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
 
 
 # --- Vision LLM Integration (Ollama) ---
@@ -1248,6 +1253,7 @@ def rtsp_processor_thread():
             # --- Recognition mode selection ---
             vlm_settings = _get_cached_vision_settings()
             rec_mode = vlm_settings["recognition_mode"]
+            rtsp_status["recognition_mode"] = rec_mode
 
             analysis_start = time.time()
             if rec_mode == "vision_llm":
@@ -1323,7 +1329,8 @@ def rtsp_processor_thread():
                     "plate": plate,
                     "confidence": confidence,
                     "proc_ms": proc_ms,
-                    "has_plate": True
+                    "has_plate": True,
+                    "source": result.get("source", "fast_alpr"),
                 })
                 
                 rtsp_status["state"] = "connected"
@@ -1340,7 +1347,8 @@ def rtsp_processor_thread():
                         "plate": "UNKNOWN",
                         "confidence": 0.0,
                         "proc_ms": proc_ms,
-                        "has_plate": False
+                        "has_plate": False,
+                        "source": rec_mode,
                     })
                 
                 # Update status UI
@@ -1374,6 +1382,7 @@ def rtsp_processor_thread():
                         vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
                         vlm_plate = vlm_result.get("plate", "")
                         vlm_conf = vlm_result.get("confidence", 0.0)
+                        rtsp_active_session["vlm_processing_time_ms"] = vlm_result.get("processing_time_ms")
                         if vlm_plate and vlm_plate != "UNKNOWN" and vlm_conf > s_conf:
                             logger.info(f"📹 RTSP: Vision LLM improved plate: '{s_plate}' ({s_conf:.2f}) -> '{vlm_plate}' ({vlm_conf:.2f})")
                             s_plate = vlm_plate
@@ -1390,6 +1399,9 @@ def rtsp_processor_thread():
                 
                 db = SessionLocal()
                 try:
+                    # Calculate VLM time if hybrid fallback was used
+                    _vlm_time = rtsp_active_session.get("vlm_processing_time_ms")
+
                     event = models.Event(
                         timestamp=datetime.now(),
                         detected_plate=s_plate,
@@ -1401,7 +1413,9 @@ def rtsp_processor_thread():
                         match_score=s_match_score,
                         ha_triggered=rtsp_active_session.get("has_triggered", False),
                         trigger_timestamp=rtsp_active_session.get("trigger_timestamp"),
-                        processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None
+                        processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None,
+                        recognition_source=rec_mode,
+                        vlm_processing_time_ms=_vlm_time,
                     )
                     db.add(event)
                     db.flush()
@@ -1414,8 +1428,9 @@ def rtsp_processor_thread():
                             detected_plate=img_data["plate"],
                             confidence=img_data["confidence"],
                             has_plate=img_data["has_plate"],
-                            is_trigger=(i == 0), # Just mark the first one as trigger for the star icon
-                            processing_time_ms=img_data["proc_ms"]
+                            is_trigger=(i == 0),
+                            processing_time_ms=img_data["proc_ms"],
+                            recognition_source=img_data.get("source", "fast_alpr"),
                         )
                         db.add(event_image)
                     

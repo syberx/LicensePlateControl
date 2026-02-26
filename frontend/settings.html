@@ -739,7 +739,7 @@
 
                             <!-- Stats Grid -->
                             <div
-                                style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.75rem;">
+                                style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; font-size: 0.75rem;">
                                 <div
                                     style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
                                     <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Analysiert</div>
@@ -752,6 +752,14 @@
                                     </div>
                                     <div style="color: #34d399; font-weight: 600;">🚗 <span
                                             x-text="status.detections || 0"></span></div>
+                                </div>
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Modus</div>
+                                    <div style="font-weight: 600;"
+                                        :style="status.recognition_mode === 'hybrid' ? 'color: #c084fc;' : status.recognition_mode === 'vision_llm' ? 'color: #f472b6;' : 'color: #60a5fa;'"
+                                        x-text="status.recognition_mode === 'hybrid' ? 'Hybrid' : status.recognition_mode === 'vision_llm' ? 'Vision LLM' : 'Fast ALPR'">
+                                    </div>
                                 </div>
                                 <div
                                     style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">

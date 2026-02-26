@@ -644,9 +644,14 @@
                                 <div class="conf-bar-fill" :class="getConfClass(e.confidence)"
                                     :style="'width: ' + (parseFloat(e.confidence)*100) + '%;'"></div>
                             </div>
-                            <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px;">
+                            <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px; display: flex; align-items: center; gap: 0.5rem;">
                                 📸 <span x-text="e.image_count"></span>
-                                <span style="margin-left: 0.5rem;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
+                                <template x-if="e.recognition_source && e.recognition_source !== 'fast_alpr'">
+                                    <span style="padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600;"
+                                        :style="e.recognition_source === 'hybrid' ? 'background: rgba(192,132,252,0.2); color: #c084fc;' : 'background: rgba(244,114,182,0.2); color: #f472b6;'"
+                                        x-text="e.recognition_source === 'hybrid' ? 'HYBRID' : 'VLM'"></span>
+                                </template>
+                                <span style="margin-left: auto;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
                             </div>
                         </div>
                     </div>
@@ -703,6 +708,21 @@
                                         <span x-show="e.processing_time_ms !== null"
                                             x-text="Number(e.processing_time_ms).toFixed(0) + ' ms'"></span>
                                         <span x-show="e.processing_time_ms === null">??? ms</span>
+                                    </span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Erkennungsmodus</span>
+                                    <span class="info-val">
+                                        <span x-show="e.recognition_source === 'fast_alpr' || !e.recognition_source"
+                                            style="color: #60a5fa;">Fast ALPR</span>
+                                        <span x-show="e.recognition_source === 'hybrid'"
+                                            style="color: #c084fc;">Hybrid</span>
+                                        <span x-show="e.recognition_source === 'vision_llm'"
+                                            style="color: #f472b6;">Vision LLM</span>
+                                        <template x-if="e.vlm_processing_time_ms">
+                                            <span style="color: rgba(255,255,255,0.4); margin-left: 0.5rem;"
+                                                x-text="'(LLM: ' + Number(e.vlm_processing_time_ms).toFixed(0) + ' ms)'"></span>
+                                        </template>
                                     </span>
                                 </div>
                                 <div class="info-item">

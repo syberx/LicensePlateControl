@@ -30,6 +30,9 @@ class Event(Base):
     trigger_timestamp = Column(DateTime, nullable=True)
     # Phase 6: Engine diagnostics
     processing_time_ms = Column(Float, nullable=True)
+    # Phase 8: Recognition source tracking
+    recognition_source = Column(String, nullable=True)  # fast_alpr | vision_llm | hybrid
+    vlm_processing_time_ms = Column(Float, nullable=True)  # Vision LLM time (separate from engine time)
     # Phase 7: Relationship to images
     images = relationship("EventImage", back_populates="event", order_by="EventImage.id")
 
@@ -46,6 +49,7 @@ class EventImage(Base):
     is_trigger = Column(Boolean, default=False)  # First plate detection that triggered HA
     created_at = Column(DateTime, default=datetime.datetime.now)
     processing_time_ms = Column(Float, nullable=True)
+    recognition_source = Column(String, nullable=True)  # fast_alpr | vision_llm
 
     event = relationship("Event", back_populates="images")
 
