@@ -860,11 +860,10 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
         debug_frame_buffer.popleft()
 
 def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
-    """Send JPEG bytes to the engine API and return the best plate result.
+    """Send JPEG bytes to the engine API (single-pass /analyze) and return the best plate result.
 
+    Used by the file watcher path. RTSP uses the 2-pass _detect_plates + _ocr_plate instead.
     Returns dict with keys: plate, confidence, processing_time_ms, source, crop_jpeg (optional bytes), bbox
-    Note: bbox is in the coordinate space of the submitted image (may be downscaled).
-    The caller should use bbox + scale info to crop from the original resolution.
     """
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
@@ -890,6 +889,39 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
     except Exception as e:
         logger.error(f"RTSP engine analysis error: {e}")
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
+
+
+def _detect_plates(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
+    """Pass 1: Send JPEG to engine /detect endpoint — YOLO detection only, no OCR.
+    Returns dict with 'detections' list of {bbox, confidence} and 'processing_time_ms'."""
+    try:
+        files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
+        response = requests.post(f"{ENGINE_URL}/detect", files=files, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Engine /detect error {response.status_code}")
+    except Exception as e:
+        logger.error(f"Engine /detect request failed: {e}")
+    return {"detections": [], "processing_time_ms": None}
+
+
+def _ocr_plate(jpeg_bytes: bytes, filename: str = "crop.jpg") -> dict:
+    """Pass 2: Send plate crop JPEG to engine /ocr endpoint — OCR only.
+    Returns dict with 'plate', 'confidence', 'processing_time_ms'."""
+    try:
+        files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
+        response = requests.post(f"{ENGINE_URL}/ocr", files=files, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            plate = apply_corrections(data.get("plate", ""))
+            data["plate"] = plate
+            return data
+        else:
+            logger.error(f"Engine /ocr error {response.status_code}")
+    except Exception as e:
+        logger.error(f"Engine /ocr request failed: {e}")
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
 
 
 # --- PaddleOCR Backup Integration ---
@@ -1287,32 +1319,27 @@ def rtsp_processor_thread():
             rec_mode = cascade_settings["recognition_mode"]
             rtsp_status["recognition_mode"] = rec_mode
 
+            # === 2-PASS ARCHITECTURE ===
+            # Pass 1: YOLO detection on 640px downscaled image (fast, ~100-200ms)
+            # Pass 2: OCR on hi-res crop from original frame (~50-100ms)
+            # Total: ~200-300ms instead of ~1500-3000ms single-pass
             analysis_start = time.time()
-            # Always use fast_alpr first; hybrid fallback happens at session finalization
-            result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
-            analysis_duration = time.time() - analysis_start
-            _t_engine = analysis_duration
 
-            plate = result.get("plate", "")
-            confidence = result.get("confidence", 0.0)
-            proc_ms = result.get("processing_time_ms")
+            detect_result = _detect_plates(engine_bytes, f"rtsp_{cam_name}.jpg")
+            detections = detect_result.get("detections", [])
+            detect_ms = detect_result.get("processing_time_ms")
 
-            if proc_ms:
-                rtsp_processing_times.append(proc_ms)
-                avg_ms = sum(rtsp_processing_times) / len(rtsp_processing_times)
-                rtsp_status["last_processing_ms"] = round(avg_ms, 1)
-            else:
-                rtsp_status["last_processing_ms"] = None
+            plate = ""
+            confidence = 0.0
+            ocr_ms = None
+            result = {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
 
-            # Store in debug buffer (showing exactly what the engine saw)
-            _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
+            if detections:
+                # Take best detection (highest confidence)
+                best_det = max(detections, key=lambda d: d.get("confidence", 0))
+                engine_bbox = best_det.get("bbox")
 
-            # --- Extract HIGH-RESOLUTION crop from original frame ---
-            # The engine bbox is in the downscaled/ROI-cropped coordinate space.
-            # We map it back to the original full-resolution frame for sharp crops.
-            engine_bbox = result.get("bbox")
-            if engine_bbox and len(engine_bbox) == 4:
-                try:
+                if engine_bbox and len(engine_bbox) == 4:
                     ex1, ey1, ex2, ey2 = engine_bbox
                     # Reverse the resize: scale bbox back to ROI-crop size
                     if ew > YOLO_MAX_WIDTH:
@@ -1336,14 +1363,43 @@ def rtsp_processor_thread():
                     fh, fw = frame.shape[:2]
                     ox1, oy1 = max(0, ox1), max(0, oy1)
                     ox2, oy2 = min(fw, ox2), min(fh, oy2)
+
                     if ox2 > ox1 and oy2 > oy1:
+                        # Hi-res crop from original 1080p frame
                         hires_crop = frame[oy1:oy2, ox1:ox2]
                         _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        result["crop_jpeg"] = hires_buf.tobytes()
+                        crop_jpeg_bytes = hires_buf.tobytes()
                         crop_h, crop_w = hires_crop.shape[:2]
-                        logger.debug(f"Hi-res crop: {crop_w}x{crop_h}px from original {fw}x{fh} frame")
-                except Exception as e:
-                    logger.warning(f"Hi-res crop extraction failed: {e}")
+                        logger.debug(f"2-pass: Hi-res crop {crop_w}x{crop_h}px from {fw}x{fh} frame")
+
+                        # Pass 2: OCR on hi-res crop
+                        ocr_result = _ocr_plate(crop_jpeg_bytes, f"rtsp_{cam_name}_crop.jpg")
+                        plate = ocr_result.get("plate", "")
+                        confidence = ocr_result.get("confidence", 0.0)
+                        ocr_ms = ocr_result.get("processing_time_ms")
+
+                        result = {
+                            "plate": plate,
+                            "confidence": confidence,
+                            "processing_time_ms": (detect_ms or 0) + (ocr_ms or 0),
+                            "source": "fast_alpr",
+                            "crop_jpeg": crop_jpeg_bytes,
+                            "bbox": [ox1, oy1, ox2, oy2],
+                        }
+
+            analysis_duration = time.time() - analysis_start
+            _t_engine = analysis_duration
+            proc_ms = result.get("processing_time_ms")
+
+            if proc_ms:
+                rtsp_processing_times.append(proc_ms)
+                avg_ms = sum(rtsp_processing_times) / len(rtsp_processing_times)
+                rtsp_status["last_processing_ms"] = round(avg_ms, 1)
+            else:
+                rtsp_status["last_processing_ms"] = None
+
+            # Store in debug buffer (showing exactly what the engine saw)
+            _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
 
             # Encode full original frame (not downscaled) for session storage
             _, orig_frame_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
@@ -1740,7 +1796,7 @@ def process_startup_series(folder_path: str, imgs: list):
 def _startup_system_check():
     """Run system checks at startup and log detailed status."""
     logger.info("=" * 60)
-    logger.info("  LicensePlateControl Backend v1.4.0 — System Start")
+    logger.info("  LicensePlateControl Backend v1.5.0 — System Start")
     logger.info("=" * 60)
 
     # 1. Engine health check
