@@ -13,12 +13,13 @@ import cv2
 cv2.setNumThreads(2)
 import numpy as np
 import time
+import traceback
+
+alpr = None
+alpr_error = None
 
 try:
     from fast_alpr import ALPR
-    # Use the models from fast-alpr HuggingFace demo that work well for European plates:
-    # Detector: yolo-v9-t-640 = 640px input, great accuracy for plate localization
-    # OCR: cct-s-v1 = "small" model (better than default "xs"), trained on global plates
 
     # Check if OpenVINO Execution Provider is available in ONNX Runtime
     _ov_device = os.environ.get("ORT_OPENVINO_DEVICE", "CPU")
@@ -42,11 +43,14 @@ try:
     )
     print(f"INFO: ALPR initialized with yolo-v9-t-640 detector + cct-s-v1 OCR (device: {_ov_device})")
 except ImportError as e:
-    print(f"Warning: fast_alpr could not be imported: {e}. Using mock ALPR.")
-    alpr = None
+    alpr_error = f"ImportError: {e}"
+    print(f"ERROR: fast_alpr could not be imported: {e}")
+    print(f"ERROR: Install with: pip install fast-alpr")
+    traceback.print_exc()
 except Exception as e:
-    print(f"Warning: fast_alpr failed to initialize: {e}. Using mock ALPR.")
-    alpr = None
+    alpr_error = f"{type(e).__name__}: {e}"
+    print(f"ERROR: fast_alpr failed to initialize: {e}")
+    traceback.print_exc()
 
 app = FastAPI(title="LicensePlateControl Engine")
 
@@ -94,4 +98,10 @@ async def analyze_image(file: UploadFile = File(...)):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "alpr_loaded": alpr is not None}
+    return {
+        "status": "ok" if alpr else "degraded",
+        "alpr_loaded": alpr is not None,
+        "error": alpr_error,
+        "mock_mode": alpr is None,
+        "version": "1.2.0",
+    }
