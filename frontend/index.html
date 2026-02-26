@@ -389,22 +389,22 @@
 
         .thumb-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-            gap: 8px;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 10px;
         }
 
         .thumb-item {
             position: relative;
-            border-radius: 8px;
+            border-radius: 10px;
             overflow: hidden;
             cursor: pointer;
-            aspect-ratio: 1;
+            aspect-ratio: 4/3;
             border: 2px solid rgba(255, 255, 255, 0.08);
             transition: all 0.2s;
             background: #000;
         }
 
-        .thumb-item img {
+        .thumb-item img.thumb-main {
             width: 100%;
             height: 100%;
             object-fit: cover;
@@ -412,12 +412,12 @@
             transition: opacity 0.2s;
         }
 
-        .thumb-item:hover img {
+        .thumb-item:hover img.thumb-main {
             opacity: 1;
         }
 
         .thumb-item:hover {
-            transform: scale(1.05);
+            transform: scale(1.03);
             z-index: 5;
         }
 
@@ -429,7 +429,7 @@
             grid-row: span 2;
         }
 
-        .thumb-plate img {
+        .thumb-plate img.thumb-main {
             opacity: 0.85;
         }
 
@@ -438,45 +438,51 @@
             bottom: 0;
             left: 0;
             right: 0;
-            padding: 3px 6px;
-            background: rgba(0, 0, 0, 0.7);
+            padding: 4px 8px;
+            background: rgba(0, 0, 0, 0.75);
             color: #34d399;
-            font-size: 0.65rem;
+            font-size: 0.75rem;
             font-weight: 700;
             text-align: center;
             letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .thumb-plate-label .thumb-meta {
+            font-weight: 400;
+            font-size: 0.6rem;
+            color: rgba(255, 255, 255, 0.5);
         }
 
         .thumb-time-label {
             position: absolute;
             top: 0;
             right: 0;
-            padding: 2px 4px;
-            background: rgba(0, 0, 0, 0.6);
+            padding: 3px 6px;
+            background: rgba(0, 0, 0, 0.7);
             color: rgba(255, 255, 255, 0.7);
-            font-size: 0.55rem;
+            font-size: 0.65rem;
             font-family: monospace;
-            border-bottom-left-radius: 4px;
+            border-bottom-left-radius: 6px;
         }
 
-        .thumb-crop {
+        .thumb-source-label {
             position: absolute;
-            top: 4px;
-            left: 4px;
-            max-width: 60%;
-            max-height: 35%;
-            border: 1px solid #34d399;
-            border-radius: 3px;
-            background: #000;
-            cursor: pointer;
-            z-index: 3;
-            box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
+            top: 0;
+            left: 0;
+            padding: 2px 6px;
+            font-size: 0.55rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-bottom-right-radius: 6px;
         }
 
-        .thumb-crop:hover {
-            transform: scale(1.8);
-            z-index: 10;
-        }
+        .thumb-source-alpr { background: rgba(96,165,250,0.3); color: #60a5fa; }
+        .thumb-source-paddle { background: rgba(251,146,60,0.3); color: #fb923c; }
+        .thumb-source-hybrid { background: rgba(192,132,252,0.3); color: #c084fc; }
 
         /* Trigger star indicator */
         .trigger-star {
@@ -508,6 +514,79 @@
 
         .thumb-noplat img {
             filter: grayscale(40%);
+        }
+
+        /* --- Dedicated Plate Crop Section --- */
+        .crop-section {
+            margin-top: 1.25rem;
+            padding: 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(52, 211, 153, 0.2);
+            border-radius: 12px;
+        }
+
+        .crop-section-header {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.75rem;
+        }
+
+        .crop-gallery {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-start;
+        }
+
+        .crop-card {
+            background: #000;
+            border: 2px solid #34d399;
+            border-radius: 10px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 0 12px rgba(52, 211, 153, 0.3);
+            max-width: 300px;
+        }
+
+        .crop-card:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(52, 211, 153, 0.5);
+        }
+
+        .crop-card img {
+            display: block;
+            width: 100%;
+            min-height: 60px;
+            max-height: 120px;
+            object-fit: contain;
+            background: #111;
+            padding: 4px;
+        }
+
+        .crop-card-info {
+            padding: 6px 10px;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .crop-card-plate {
+            color: #34d399;
+            font-weight: 700;
+            font-size: 0.85rem;
+            letter-spacing: 1px;
+        }
+
+        .crop-card-meta {
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 0.65rem;
+            text-align: right;
         }
 
         .empty-state {
@@ -574,7 +653,15 @@
             }
 
             .thumb-grid {
-                grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            }
+
+            .crop-card {
+                max-width: 100%;
+            }
+
+            .crop-gallery {
+                flex-direction: column;
             }
         }
     </style>
@@ -582,7 +669,7 @@
 
 <body x-data="dashboard()">
     <nav class="nav">
-        <div class="nav-brand">License<span>Plate</span>Control <span style="font-size:0.6rem;font-weight:400;color:rgba(255,255,255,0.3);margin-left:0.4rem;">v1.3.0</span></div>
+        <div class="nav-brand">License<span>Plate</span>Control <span style="font-size:0.6rem;font-weight:400;color:rgba(255,255,255,0.3);margin-left:0.4rem;">v1.4.0</span></div>
         <div class="nav-links">
             <a href="/" class="nav-link active">Dashboard</a>
             <a href="/plates.html" class="nav-link">Kennzeichen</a>
@@ -731,11 +818,21 @@
                                     <span class="info-label">Erkennungsmodus</span>
                                     <span class="info-val">
                                         <span x-show="e.recognition_source === 'fast_alpr' || !e.recognition_source"
-                                            style="color: #60a5fa;">Fast ALPR</span>
+                                            style="color: #60a5fa;">Fast ALPR
+                                            <span style="font-weight:400;color:rgba(255,255,255,0.4);font-size:0.75rem;">(YOLO v9 + CCT OCR)</span>
+                                        </span>
                                         <span x-show="e.recognition_source === 'hybrid'"
-                                            style="color: #c084fc;">Hybrid</span>
+                                            style="color: #c084fc;">Hybrid
+                                            <span style="font-weight:400;color:rgba(255,255,255,0.4);font-size:0.75rem;">(Fast ALPR + PaddleOCR Fallback)</span>
+                                        </span>
                                     </span>
                                 </div>
+                                <template x-if="e.vlm_processing_time_ms">
+                                    <div class="info-item">
+                                        <span class="info-label">PaddleOCR Dauer</span>
+                                        <span class="info-val" x-text="Number(e.vlm_processing_time_ms).toFixed(0) + ' ms'"></span>
+                                    </div>
+                                </template>
                                 <div class="info-item">
                                     <span class="info-label">Serien-ID (Motion Burst)</span>
                                     <span class="info-val"
@@ -759,7 +856,32 @@
                                         .then(d => { images = d; loaded = true; });
                                 }
                             ">
-                                <div class="gallery-header">
+                                <!-- Dedicated Plate Crop Section -->
+                                <template x-if="images.filter(i => i.has_crop).length > 0">
+                                    <div class="crop-section">
+                                        <div class="crop-section-header">
+                                            Kennzeichen-Ausschnitt (was OCR sieht)
+                                        </div>
+                                        <div class="crop-gallery">
+                                            <template x-for="img in images.filter(i => i.has_crop)" :key="'crop-' + img.id">
+                                                <div class="crop-card" @click="openLightbox('/api/images/db/' + img.id + '/crop')">
+                                                    <img :src="'/api/images/db/' + img.id + '/crop'" loading="lazy" alt="Kennzeichen-Ausschnitt">
+                                                    <div class="crop-card-info">
+                                                        <span class="crop-card-plate" x-text="img.detected_plate || '?'"></span>
+                                                        <span class="crop-card-meta">
+                                                            <span x-text="img.confidence ? (img.confidence * 100).toFixed(0) + '%' : ''"></span>
+                                                            <span x-text="img.processing_time_ms ? ' · ' + Number(img.processing_time_ms).toFixed(0) + 'ms' : ''"></span>
+                                                            <br>
+                                                            <span x-text="img.recognition_source === 'paddleocr' ? 'PaddleOCR' : img.recognition_source === 'hybrid' ? 'Hybrid' : 'Fast ALPR'"></span>
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <div class="gallery-header" style="margin-top: 1.25rem;">
                                     Bildanalyse
                                     <span class="gallery-stats"
                                         x-text="images.length + ' Bilder · ' + images.filter(i => i.has_plate).length + ' mit Kennzeichen'">
@@ -769,22 +891,25 @@
                                     <template x-for="img in images" :key="img.id">
                                         <div class="thumb-item" :class="img.has_plate ? 'thumb-plate' : 'thumb-noplat'"
                                             @click="openLightbox('/api/images/db/' + img.id)">
-                                            <img :src="'/api/images/db/' + img.id" loading="lazy" alt="Event Image">
+                                            <img class="thumb-main" :src="'/api/images/db/' + img.id" loading="lazy" alt="Event Image">
                                             <template x-if="img.is_trigger">
                                                 <div class="trigger-star">⭐</div>
                                             </template>
                                             <template x-if="img.has_plate && img.detected_plate">
-                                                <div class="thumb-plate-label" x-text="img.detected_plate"></div>
+                                                <div class="thumb-plate-label">
+                                                    <span x-text="img.detected_plate"></span>
+                                                    <span class="thumb-meta" x-text="img.confidence ? (img.confidence * 100).toFixed(0) + '%' : ''"></span>
+                                                </div>
                                             </template>
-                                            <template x-if="img.has_crop">
-                                                <img class="thumb-crop"
-                                                    :src="'/api/images/db/' + img.id + '/crop'"
-                                                    loading="lazy" alt="Plate crop"
-                                                    @click.stop="openLightbox('/api/images/db/' + img.id + '/crop')">
+                                            <template x-if="img.recognition_source">
+                                                <div class="thumb-source-label"
+                                                    :class="img.recognition_source === 'paddleocr' ? 'thumb-source-paddle' : img.recognition_source === 'hybrid' ? 'thumb-source-hybrid' : 'thumb-source-alpr'"
+                                                    x-text="img.recognition_source === 'paddleocr' ? 'Paddle' : img.recognition_source === 'hybrid' ? 'Hybrid' : 'ALPR'">
+                                                </div>
                                             </template>
                                             <template x-if="img.processing_time_ms">
                                                 <div class="thumb-time-label"
-                                                    x-text="Number(img.processing_time_ms).toFixed(0) + ' ms'"></div>
+                                                    x-text="Number(img.processing_time_ms).toFixed(0) + 'ms'"></div>
                                             </template>
                                         </div>
                                     </template>
