@@ -1207,22 +1207,29 @@ def rtsp_processor_thread():
             else:
                 rtsp_status["backpressure"] = False
 
-            # Spike debug log: only fires when cycle actually exceeds the configured interval
-            # (i.e. system can't keep up). Previous 80% threshold caused constant false alarms.
-            _spike_thresh = val if mode == "seconds" and val > 0 else 2.0
-            if _t_total > _spike_thresh:
-                _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
-                _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
+            # Performance logging: DEBUG for every frame, WARNING only for sustained backpressure
+            _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
+            _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
+            _total_ms = int(_t_total * 1000)
+
+            # Track consecutive slow frames for real backpressure detection
+            _interval_ms = int(val * 1000) if mode == "seconds" and val > 0 else 5000
+            if _total_ms > _interval_ms:
+                rtsp_status["_slow_frames"] = rtsp_status.get("_slow_frames", 0) + 1
+            else:
+                rtsp_status["_slow_frames"] = 0
+
+            # Only warn if 3+ consecutive frames exceed the interval (real backpressure)
+            if rtsp_status.get("_slow_frames", 0) >= 3:
                 parts = [
-                    f"SPIKE {int(_t_total*1000)}ms (limit {int(_spike_thresh*1000)}ms)",
-                    f"mask={int(_t_mask*1000)}",
-                    f"enc={int(_t_enc*1000)}",
-                    f"prev={'%d' % int(_t_preview*1000) if _did_preview else '-'}",
+                    f"BACKPRESSURE {_total_ms}ms (limit {_interval_ms}ms, {rtsp_status['_slow_frames']}x slow)",
                     f"engine={_eng_ms}(net={_net_ms})",
-                    f"match={int(_t_match*1000)}",
                     f"plate={plate or '-'}",
                 ]
                 logger.warning(f"📹 {' | '.join(parts)}")
+            else:
+                # Normal performance trace at DEBUG level (won't flood logs)
+                logger.debug(f"📹 cycle {_total_ms}ms | engine={_eng_ms} | plate={plate or '-'}")
 
         except Exception as e:
             logger.error(f"📹 RTSP Processor Error: {e}")
