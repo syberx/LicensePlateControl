@@ -224,7 +224,11 @@ def safe_delete_file(file_path: str, max_retries: int = 5, delay: float = 0.5) -
     return False
 
 def process_single_image(img_path: str) -> dict:
-    """Send a single image to the engine and return the best plate result."""
+    """Send a single image to the engine and return the best plate result.
+
+    Returns dict with keys: plate, confidence, processing_time_ms, source, crop_jpeg, bbox
+    crop_jpeg is extracted from the ORIGINAL full-resolution image using the engine's bbox.
+    """
     # Wait for the file to finish writing (e.g. from FTP or Blue Iris)
     start_time = time.time()
     last_size = -1
@@ -240,15 +244,16 @@ def process_single_image(img_path: str) -> dict:
 
     try:
         with open(img_path, 'rb') as f:
-            files = {'file': (os.path.basename(img_path), f, 'image/jpeg')}
-            response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
-        
+            img_bytes = f.read()
+        files = {'file': (os.path.basename(img_path), img_bytes, 'image/jpeg')}
+        response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
+
         if response.status_code == 200:
             data = response.json()
             results = data.get("results", [])
             processing_time_ms = data.get("processing_time_ms")
-            
-            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
+
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
             for res in results:
                 plate_text = apply_corrections(res.get("plate", ""))
                 conf = float(res.get("confidence", 0.0))
@@ -258,13 +263,41 @@ def process_single_image(img_path: str) -> dict:
                         "confidence": conf,
                         "processing_time_ms": processing_time_ms,
                         "source": "fast_alpr",
+                        "bbox": res.get("bbox"),
+                        "crop_jpeg": None,
                     }
+                    # Crop from original full-resolution image for best quality
+                    bbox = res.get("bbox")
+                    if bbox and len(bbox) == 4:
+                        try:
+                            import cv2
+                            import numpy as np
+                            nparr = np.frombuffer(img_bytes, np.uint8)
+                            orig_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            if orig_img is not None:
+                                h, w = orig_img.shape[:2]
+                                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                                # Clamp to image bounds
+                                x1, y1 = max(0, x1), max(0, y1)
+                                x2, y2 = min(w, x2), min(h, y2)
+                                if x2 > x1 and y2 > y1:
+                                    crop = orig_img[y1:y2, x1:x2]
+                                    _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                                    best["crop_jpeg"] = buf.tobytes()
+                        except Exception as e:
+                            logger.warning(f"Could not crop plate from original image: {e}")
+                    # Fallback: use engine's crop_b64 if own crop failed
+                    if best["crop_jpeg"] is None:
+                        import base64
+                        crop_b64 = res.get("crop_b64")
+                        if crop_b64:
+                            best["crop_jpeg"] = base64.b64decode(crop_b64)
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for {img_path}")
     except Exception as e:
         logger.error(f"Error processing {img_path}: {e}")
-    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
 
 def get_setting(db, key: str, default: str) -> str:
     s = db.query(models.Setting).filter(models.Setting.key == key).first()
@@ -400,12 +433,20 @@ def process_first_image(folder_path: str, img_path: str):
     match_score_val = match_score if match_score is not None else 0.0
 
     # Hybrid cascade: PaddleOCR fallback when fuzzy-match is poor (not just OCR confidence)
+    # Send only the plate CROP to PaddleOCR for better accuracy (not the full image)
     if rec_mode == "hybrid" and match_score_val < 0.80 and plate:
         logger.info(f"Hybrid Stage 2 (PaddleOCR) for first image — match_score {match_score_val:.2f} < 0.80")
         try:
-            with open(img_path, 'rb') as f:
-                jpeg_bytes = f.read()
-            paddle_result = analyze_with_paddleocr(jpeg_bytes)
+            # Prefer plate crop from YOLO detection; fall back to full image
+            crop_bytes = result.get("crop_jpeg")
+            if crop_bytes:
+                logger.info("PaddleOCR: Using YOLO plate crop (not full image)")
+                paddle_input = crop_bytes
+            else:
+                logger.info("PaddleOCR: No crop available, using full image")
+                with open(img_path, 'rb') as f:
+                    paddle_input = f.read()
+            paddle_result = analyze_with_paddleocr(paddle_input)
             p_plate = paddle_result.get("plate", "")
             if p_plate:
                 p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
@@ -413,7 +454,10 @@ def process_first_image(folder_path: str, img_path: str):
                 logger.info(f"PaddleOCR: '{p_plate}' (match={p_score_val:.2f}) vs fast_alpr: '{plate}' (match={match_score_val:.2f})")
                 if p_score_val > match_score_val:
                     logger.info(f"PaddleOCR wins! '{plate}' -> '{p_plate}'")
+                    # Keep the crop from fast_alpr (high quality)
+                    crop_jpeg_backup = result.get("crop_jpeg")
                     result = paddle_result
+                    result["crop_jpeg"] = crop_jpeg_backup
                     plate = result.get("plate", "")
                     conf = result.get("confidence", 0.0)
                     proc_time = result.get("processing_time_ms")
@@ -559,18 +603,30 @@ def process_followup_images(folder_path: str):
     match_score_batch_val = match_score_batch if match_score_batch is not None else 0.0
 
     # Hybrid cascade: PaddleOCR fallback when fuzzy-match is poor
+    # Send only the plate CROP to PaddleOCR for better accuracy
     if rec_mode == "hybrid" and match_score_batch_val < 0.80 and best_plate:
         logger.info(f"Hybrid Stage 2 (PaddleOCR) for follow-up batch — match_score {match_score_batch_val:.2f} < 0.80")
         try:
-            best_img_path = image_results[0][0]
+            # Find best crop from image results (prefer YOLO crop over full image)
+            paddle_input = None
             for img_path, res in image_results:
-                if res.get("confidence", 0) > 0:
-                    best_img_path = img_path
+                if res.get("crop_jpeg") and res.get("confidence", 0) > 0:
+                    paddle_input = res["crop_jpeg"]
+                    logger.info("PaddleOCR: Using YOLO plate crop from best detection")
                     break
-            if os.path.exists(best_img_path):
-                with open(best_img_path, 'rb') as f:
-                    paddle_bytes = f.read()
-                paddle_result = analyze_with_paddleocr(paddle_bytes)
+            # Fallback: use full image file
+            if paddle_input is None:
+                best_img_path = image_results[0][0]
+                for img_path, res in image_results:
+                    if res.get("confidence", 0) > 0:
+                        best_img_path = img_path
+                        break
+                if os.path.exists(best_img_path):
+                    with open(best_img_path, 'rb') as f:
+                        paddle_input = f.read()
+                    logger.info("PaddleOCR: No crop available, using full image")
+            if paddle_input:
+                paddle_result = analyze_with_paddleocr(paddle_input)
                 p_plate = paddle_result.get("plate", "")
                 if p_plate:
                     p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
@@ -806,7 +862,9 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
 def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
     """Send JPEG bytes to the engine API and return the best plate result.
 
-    Returns dict with keys: plate, confidence, processing_time_ms, source, crop_jpeg (optional bytes)
+    Returns dict with keys: plate, confidence, processing_time_ms, source, crop_jpeg (optional bytes), bbox
+    Note: bbox is in the coordinate space of the submitted image (may be downscaled).
+    The caller should use bbox + scale info to crop from the original resolution.
     """
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
@@ -815,25 +873,23 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
             data = response.json()
             results = data.get("results", [])
             processing_time_ms = data.get("processing_time_ms")
-            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
             for res in results:
                 plate_text = apply_corrections(res.get("plate", ""))
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
-                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
-                    # Decode plate crop if engine returned one
+                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms, "source": "fast_alpr", "bbox": res.get("bbox"), "crop_jpeg": None}
+                    # Fallback: use engine's crop if no bbox available for own cropping
                     crop_b64 = res.get("crop_b64")
                     if crop_b64:
                         import base64
                         best["crop_jpeg"] = base64.b64decode(crop_b64)
-                    else:
-                        best["crop_jpeg"] = None
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for RTSP frame")
     except Exception as e:
         logger.error(f"RTSP engine analysis error: {e}")
-    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
 
 
 # --- PaddleOCR Backup Integration ---
@@ -1251,6 +1307,48 @@ def rtsp_processor_thread():
             # Store in debug buffer (showing exactly what the engine saw)
             _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
 
+            # --- Extract HIGH-RESOLUTION crop from original frame ---
+            # The engine bbox is in the downscaled/ROI-cropped coordinate space.
+            # We map it back to the original full-resolution frame for sharp crops.
+            engine_bbox = result.get("bbox")
+            if engine_bbox and len(engine_bbox) == 4:
+                try:
+                    ex1, ey1, ex2, ey2 = engine_bbox
+                    # Reverse the resize: scale bbox back to ROI-crop size
+                    if ew > YOLO_MAX_WIDTH:
+                        inv_scale = 1.0 / scale  # scale was set during resize above
+                    else:
+                        inv_scale = 1.0
+                    # Bbox in ROI-crop coordinate space
+                    rx1 = int(ex1 * inv_scale)
+                    ry1 = int(ey1 * inv_scale)
+                    rx2 = int(ex2 * inv_scale)
+                    ry2 = int(ey2 * inv_scale)
+                    # Add ROI offset to get original frame coordinates
+                    if has_roi:
+                        ox1 = rx1 + x_rect
+                        oy1 = ry1 + y_rect
+                        ox2 = rx2 + x_rect
+                        oy2 = ry2 + y_rect
+                    else:
+                        ox1, oy1, ox2, oy2 = rx1, ry1, rx2, ry2
+                    # Clamp to original frame bounds
+                    fh, fw = frame.shape[:2]
+                    ox1, oy1 = max(0, ox1), max(0, oy1)
+                    ox2, oy2 = min(fw, ox2), min(fh, oy2)
+                    if ox2 > ox1 and oy2 > oy1:
+                        hires_crop = frame[oy1:oy2, ox1:ox2]
+                        _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                        result["crop_jpeg"] = hires_buf.tobytes()
+                        crop_h, crop_w = hires_crop.shape[:2]
+                        logger.debug(f"Hi-res crop: {crop_w}x{crop_h}px from original {fw}x{fh} frame")
+                except Exception as e:
+                    logger.warning(f"Hi-res crop extraction failed: {e}")
+
+            # Encode full original frame (not downscaled) for session storage
+            _, orig_frame_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            orig_frame_bytes = orig_frame_buf.tobytes()
+
             # --- Intelligent Event Grouping Logic Starts Here ---
             is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
             now_str = time.time()
@@ -1295,9 +1393,9 @@ def rtsp_processor_thread():
                     if rtsp_active_session["has_triggered"]:
                         rtsp_active_session["trigger_timestamp"] = datetime.now()
                         
-                # Add current frame to session gallery
+                # Add current frame to session gallery (original resolution)
                 rtsp_active_session["images"].append({
-                    "jpeg_bytes": engine_bytes,
+                    "jpeg_bytes": orig_frame_bytes,
                     "plate": plate,
                     "confidence": confidence,
                     "proc_ms": proc_ms,
@@ -1316,7 +1414,7 @@ def rtsp_processor_thread():
                 # If we are in an active session, add empty frames up to a limit (so gallery shows the car leaving)
                 if rtsp_active_session["is_active"] and len(rtsp_active_session["images"]) < 10:
                      rtsp_active_session["images"].append({
-                        "jpeg_bytes": engine_bytes,
+                        "jpeg_bytes": orig_frame_bytes,
                         "plate": "UNKNOWN",
                         "confidence": 0.0,
                         "proc_ms": proc_ms,
@@ -1354,11 +1452,22 @@ def rtsp_processor_thread():
                     plate_frames = [img for img in s_imgs if img.get("has_plate")]
                     # Sort by confidence desc — try best frame first
                     plate_frames.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-                    best_frame = plate_frames[0]["jpeg_bytes"] if plate_frames else (s_imgs[0]["jpeg_bytes"] if s_imgs else None)
+                    # Prefer plate crop from YOLO detection for PaddleOCR
+                    best_crop = None
+                    for pf in plate_frames:
+                        if pf.get("crop_jpeg"):
+                            best_crop = pf["crop_jpeg"]
+                            break
+                    if best_crop:
+                        paddle_input = best_crop
+                        logger.info(f"📹 RTSP: PaddleOCR using YOLO plate crop (not full frame)")
+                    else:
+                        paddle_input = plate_frames[0]["jpeg_bytes"] if plate_frames else (s_imgs[0]["jpeg_bytes"] if s_imgs else None)
+                        logger.info(f"📹 RTSP: PaddleOCR using full frame (no crop available)")
 
-                    if best_frame:
+                    if paddle_input:
                         logger.info(f"📹 RTSP: Hybrid Stage 2 (PaddleOCR) — fast_alpr match only {s_match_before:.2f}")
-                        paddle_result = analyze_with_paddleocr(best_frame)
+                        paddle_result = analyze_with_paddleocr(paddle_input)
                         p_plate = paddle_result.get("plate", "")
                         p_conf = paddle_result.get("confidence", 0.0)
 
@@ -1628,10 +1737,64 @@ def process_startup_series(folder_path: str, imgs: list):
     finally:
         db.close()
 
+def _startup_system_check():
+    """Run system checks at startup and log detailed status."""
+    logger.info("=" * 60)
+    logger.info("  LicensePlateControl Backend v1.4.0 — System Start")
+    logger.info("=" * 60)
+
+    # 1. Engine health check
+    try:
+        resp = requests.get(f"{ENGINE_URL}/health", timeout=5)
+        if resp.status_code == 200:
+            health = resp.json()
+            alpr_ok = health.get("alpr_loaded", False)
+            device = health.get("device", "?")
+            version = health.get("version", "?")
+            mock = health.get("mock_mode", False)
+            if alpr_ok:
+                logger.info(f"  Engine: OK — v{version} | ALPR loaded | Device: {device}")
+            else:
+                err = health.get("error", "unknown")
+                logger.warning(f"  Engine: DEGRADED — ALPR not loaded ({err}) | MOCK mode active")
+        else:
+            logger.warning(f"  Engine: HTTP {resp.status_code} — may not be ready yet")
+    except Exception as e:
+        logger.warning(f"  Engine: UNREACHABLE — {e} (will retry on first image)")
+
+    # 2. Recognition mode
+    db = SessionLocal()
+    try:
+        rec_mode = get_setting(db, "recognition_mode", "fast_alpr")
+        ha_enabled = get_setting(db, "ha_enabled", "true").lower() == "true"
+        mqtt_enabled = get_setting(db, "mqtt_enabled", "false").lower() == "true"
+        rtsp_enabled = get_setting(db, "rtsp_enabled", "false").lower() == "true"
+        rtsp_url = get_setting(db, "rtsp_url", "")
+        folder_watch = get_setting(db, "folder_watch_enabled", "true").lower() == "true"
+        plate_count = db.query(models.Plate).filter(models.Plate.active == True).count()
+        event_count = db.query(models.Event).count()
+    finally:
+        db.close()
+
+    logger.info(f"  Recognition Mode: {rec_mode.upper()}")
+    if rec_mode == "hybrid":
+        logger.info(f"  Hybrid: fast_alpr (primary) + PaddleOCR (fallback on match < 0.80)")
+        logger.info(f"  PaddleOCR: Will initialize on first use (lazy-load)")
+    logger.info(f"  Active Plates: {plate_count} | Stored Events: {event_count}")
+    logger.info(f"  Integrations: HA={'ON' if ha_enabled else 'OFF'} | MQTT={'ON' if mqtt_enabled else 'OFF'}")
+    logger.info(f"  Inputs: Folder Watch={'ON' if folder_watch else 'OFF'} | RTSP={'ON' if rtsp_enabled else 'OFF'}")
+    if rtsp_enabled and rtsp_url:
+        logger.info(f"  RTSP URL: {rtsp_url}")
+    logger.info("=" * 60)
+
+
 def start_watcher():
     if not os.path.exists(EVENTS_DIR):
         os.makedirs(EVENTS_DIR, exist_ok=True)
-    
+
+    # Run startup system check
+    _startup_system_check()
+
     # Find all existing images on disk
     existing = glob.glob(os.path.join(EVENTS_DIR, "**", "*.[jJ][pP][gG]"), recursive=True) + \
                glob.glob(os.path.join(EVENTS_DIR, "**", "*.[jJ][pP][eE][gG]"), recursive=True) + \
