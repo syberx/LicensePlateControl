@@ -6,6 +6,7 @@ services:
     container_name: licenseplatecontrol-postgres
     restart: unless-stopped
     environment:
+      - TZ=Europe/Berlin
       - POSTGRES_USER=lpc
       - POSTGRES_PASSWORD=lpc_secret_2026
       - POSTGRES_DB=licenseplatecontrol
@@ -27,15 +28,18 @@ services:
     volumes:
       - ./volumes/events:/events
     environment:
+      - TZ=Europe/Berlin
       - DATABASE_URL=postgresql://lpc:lpc_secret_2026@postgres:5432/licenseplatecontrol
       - ENGINE_URL=http://engine:8000
       - API_KEY=secretmvpkey123
       - HA_URL=http://homeassistant.local:8123
       - HA_TOKEN=optional_long_lived_access_token
       - HA_SERVICE=/api/services/cover/open_cover
+      - OLLAMA_URL=http://ollama:11434
     depends_on:
       - engine
       - postgres
+      - ollama
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -53,7 +57,37 @@ services:
       - ./volumes/models:/models
       - ./volumes/events:/events
     environment:
+      - TZ=Europe/Berlin
       - HF_HOME=/models
+      - ORT_OPENVINO_DEVICE=GPU   # Tell onnxruntime-openvino to use Intel GPU (falls back to CPU if unavailable)
+    # Intel iGPU passthrough for OpenVINO acceleration
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "992"   # render group GID (from: getent group render → render:x:992:)
+    networks:
+      - lpc-network
+
+  # Optional: Vision-LLM Fallback via Ollama (nur für Hybrid-Modus)
+  # Nutzt moondream (1.8B, ~1.7 GB RAM) — läuft auch ohne GPU rein auf CPU.
+  # Wird NUR aufgerufen wenn Fast ALPR unsicher ist (Hybrid-Modus in Settings).
+  ollama:
+    image: ollama/ollama:latest
+    container_name: licenseplatecontrol-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - TZ=Europe/Berlin
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+    deploy:
+      resources:
+        limits:
+          memory: 3G    # moondream braucht ~1.7 GB, Limit auf 3 GB
     networks:
       - lpc-network
 
@@ -65,6 +99,11 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    volumes:
+      - ./frontend/index.html:/usr/share/nginx/html/index.html:ro
+      - ./frontend/plates.html:/usr/share/nginx/html/plates.html:ro
+      - ./frontend/settings.html:/usr/share/nginx/html/settings.html:ro
+      - ./frontend/logs.html:/usr/share/nginx/html/logs.html:ro
     depends_on:
       - backend
     networks:
@@ -72,6 +111,7 @@ services:
 
 volumes:
   pgdata:
+  ollama_data:
 
 
 networks:

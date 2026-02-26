@@ -563,7 +563,7 @@
 
 <body x-data="dashboard()">
     <nav class="nav">
-        <div class="nav-brand">License<span>Plate</span>Control</div>
+        <div class="nav-brand">License<span>Plate</span>Control <span style="font-size:0.6rem;font-weight:400;color:rgba(255,255,255,0.3);margin-left:0.4rem;">v1.2.0</span></div>
         <div class="nav-links">
             <a href="/" class="nav-link active">Dashboard</a>
             <a href="/plates.html" class="nav-link">Kennzeichen</a>
@@ -644,9 +644,12 @@
                                 <div class="conf-bar-fill" :class="getConfClass(e.confidence)"
                                     :style="'width: ' + (parseFloat(e.confidence)*100) + '%;'"></div>
                             </div>
-                            <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px;">
+                            <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px; display: flex; align-items: center; gap: 0.5rem;">
                                 📸 <span x-text="e.image_count"></span>
-                                <span style="margin-left: 0.5rem;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
+                                <template x-if="e.recognition_source === 'hybrid'">
+                                    <span style="padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; background: rgba(192,132,252,0.2); color: #c084fc;">HYBRID</span>
+                                </template>
+                                <span style="margin-left: auto;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
                             </div>
                         </div>
                     </div>
@@ -703,6 +706,19 @@
                                         <span x-show="e.processing_time_ms !== null"
                                             x-text="Number(e.processing_time_ms).toFixed(0) + ' ms'"></span>
                                         <span x-show="e.processing_time_ms === null">??? ms</span>
+                                    </span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Erkennungsmodus</span>
+                                    <span class="info-val">
+                                        <span x-show="e.recognition_source === 'fast_alpr' || !e.recognition_source"
+                                            style="color: #60a5fa;">Fast ALPR</span>
+                                        <span x-show="e.recognition_source === 'hybrid'"
+                                            style="color: #c084fc;">Hybrid (3-Stufen)</span>
+                                        <template x-if="e.vlm_processing_time_ms">
+                                            <span style="color: rgba(255,255,255,0.4); margin-left: 0.5rem;"
+                                                x-text="'(Fallback: ' + Number(e.vlm_processing_time_ms).toFixed(0) + ' ms)'"></span>
+                                        </template>
                                     </span>
                                 </div>
                                 <div class="info-item">

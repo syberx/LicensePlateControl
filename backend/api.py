@@ -50,6 +50,7 @@ class EventImageResponse(BaseModel):
     is_trigger: bool = False
     created_at: Optional[datetime.datetime] = None
     processing_time_ms: Optional[float] = None
+    recognition_source: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +69,8 @@ class EventResponse(BaseModel):
     mqtt_triggered: Optional[bool] = False
     trigger_timestamp: Optional[datetime.datetime] = None
     processing_time_ms: Optional[float] = None
+    recognition_source: Optional[str] = None
+    vlm_processing_time_ms: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -83,10 +86,15 @@ class SettingResponse(BaseModel):
 
 @router.post("/api/plates", response_model=PlateResponse)
 def create_plate(plate: PlateCreate, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
-    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == plate.plate_text).first()
+    from watcher import apply_corrections, validate_plate
+    # Normalize plate text (auto-insert dashes, handle E/H suffix)
+    normalized = apply_corrections(plate.plate_text)
+    if not validate_plate(normalized):
+        raise HTTPException(status_code=400, detail=f"Ungültiges Format: '{plate.plate_text}' -> '{normalized}'. Erwartet: XX-YY-1234 (optional E/H)")
+    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == normalized).first()
     if db_plate:
-        raise HTTPException(status_code=400, detail="Plate already registered")
-    new_plate = models.Plate(plate_text=plate.plate_text, description=plate.description)
+        raise HTTPException(status_code=400, detail="Kennzeichen bereits registriert")
+    new_plate = models.Plate(plate_text=normalized, description=plate.description)
     db.add(new_plate)
     db.commit()
     db.refresh(new_plate)
@@ -128,14 +136,18 @@ def delete_plate(plate_id: int, db: Session = Depends(get_db), api_key: str = De
 
 @router.post("/api/external/plates", response_model=PlateResponse)
 def external_push_plate(plate: PlateCreate, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
-    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == plate.plate_text).first()
+    from watcher import apply_corrections, validate_plate
+    normalized = apply_corrections(plate.plate_text)
+    if not validate_plate(normalized):
+        raise HTTPException(status_code=400, detail=f"Ungültiges Format: '{plate.plate_text}'. Erwartet: XX-YY-1234 (optional E/H)")
+    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == normalized).first()
     if db_plate:
         db_plate.active = True
         db.commit()
         db.refresh(db_plate)
         return db_plate
-    
-    new_plate = models.Plate(plate_text=plate.plate_text, description=plate.description)
+
+    new_plate = models.Plate(plate_text=normalized, description=plate.description)
     db.add(new_plate)
     db.commit()
     db.refresh(new_plate)
@@ -321,3 +333,41 @@ def get_debug_stats():
         "newest": newest,
         "max_age_seconds": DEBUG_BUFFER_MAX_AGE_SECONDS,
     }
+
+
+# --- Vision LLM Test ---
+
+class VisionLLMTestRequest(BaseModel):
+    url: str
+    model: str
+
+@router.post("/api/vision_llm/test")
+def test_vision_llm(req: VisionLLMTestRequest, api_key: str = Depends(get_api_key)):
+    """Test connectivity to a Vision LLM (Ollama) instance."""
+    import requests as http_requests
+    import time as t
+    ollama_url = req.url.rstrip("/")
+    try:
+        start = t.time()
+        # Check if model is available via Ollama tags endpoint
+        resp = http_requests.get(f"{ollama_url}/api/tags", timeout=5)
+        elapsed_ms = int((t.time() - start) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
+            if req.model in models or any(req.model in m for m in models):
+                return {"success": True, "model": req.model, "response_ms": elapsed_ms, "available_models": models}
+            else:
+                return {
+                    "success": False,
+                    "error": f"Modell '{req.model}' nicht gefunden. Verfügbar: {', '.join(models) or 'keine'}. Bitte erst mit 'ollama pull {req.model}' herunterladen.",
+                    "available_models": models,
+                }
+        else:
+            return {"success": False, "error": f"Ollama antwortet mit Status {resp.status_code}"}
+    except http_requests.exceptions.ConnectionError:
+        return {"success": False, "error": f"Keine Verbindung zu {ollama_url} — ist Ollama gestartet?"}
+    except http_requests.exceptions.Timeout:
+        return {"success": False, "error": "Zeitüberschreitung (5s)"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}

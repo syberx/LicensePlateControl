@@ -348,7 +348,7 @@
 
 <body>
     <nav class="nav">
-        <div class="nav-brand">License<span>Plate</span>Control</div>
+        <div class="nav-brand">License<span>Plate</span>Control <span style="font-size:0.6rem;font-weight:400;color:rgba(255,255,255,0.3);margin-left:0.4rem;">v1.2.0</span></div>
         <div class="nav-links">
             <a href="/" class="nav-link">Dashboard</a>
             <a href="/plates.html" class="nav-link">Kennzeichen</a>
@@ -418,7 +418,7 @@
         },
         formatDebugTime(ts) {
             if (!ts) return '';
-            const d = new Date(ts + 'Z');
+            const d = new Date(ts);
             return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         },
         debugTimeRange() {
@@ -439,6 +439,8 @@
                     Broker</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'rtsp'}" @click.prevent="tab = 'rtsp'">RTSP
                     Stream</a>
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'recognition'}"
+                    @click.prevent="tab = 'recognition'">Erkennung / LLM</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'storage'}"
                     @click.prevent="tab = 'storage'">Speicher / Bereinigung</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'debug'}"
@@ -515,6 +517,88 @@
                             <div class="form-group">
                                 <label class="form-label">Passwort (Optional)</label>
                                 <input type="password" id="mqtt_pass" class="form-input" placeholder="••••••••">
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Recognition / Vision LLM Tab -->
+                <div x-show="tab === 'recognition'" x-cloak x-data="recognitionPanel()" x-init="init()">
+                    <div class="settings-card">
+                        <h3>Erkennungsmodus</h3>
+                        <p class="desc">Wähle, wie Kennzeichen erkannt werden. Das Standard-Modell (Fast ALPR) nutzt
+                            YOLO + OCR. Im Hybrid-Modus wird bei unsicheren Ergebnissen automatisch eine
+                            3-Stufen-Kaskade (Fast ALPR → PaddleOCR → Vision-LLM) durchlaufen.</p>
+
+                        <form id="recognition-form" onsubmit="return false;">
+                            <div class="form-group" style="margin-top: 1.5rem;">
+                                <label class="form-label">Erkennungsmodus</label>
+                                <select id="recognition_mode" class="form-input"
+                                    style="background: rgba(255,255,255,0.06); color: #e0e0e0; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem; border-radius: 8px;">
+                                    <option value="fast_alpr">Fast ALPR (Standard — YOLO + OCR)</option>
+                                    <option value="hybrid">Hybrid (Fast ALPR + LLM-Fallback bei Unsicherheit)</option>
+                                </select>
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
+                                    <strong>Fast ALPR:</strong> Schnell (~50ms), YOLO-Erkennung + CCT-OCR. Kein Fallback.<br>
+                                    <strong>Hybrid (3-Stufen-Kaskade):</strong><br>
+                                    &nbsp;&nbsp;1. Fast ALPR (~50ms) — immer zuerst<br>
+                                    &nbsp;&nbsp;2. PaddleOCR (~100ms) — wenn Confidence zu niedrig<br>
+                                    &nbsp;&nbsp;3. Vision-LLM (~1-3s) — nur wenn beide OCR-Engines unsicher sind
+                                </p>
+                            </div>
+
+                            <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                <h3>Vision-LLM Einstellungen (Ollama)</h3>
+                                <p class="desc">Ollama läuft als Docker-Container im selben Stack.
+                                    Nur relevant wenn der Hybrid-Modus aktiv ist.</p>
+
+                                <div class="form-group" style="margin-top: 1.5rem;">
+                                    <label class="form-label">Ollama URL</label>
+                                    <input type="text" id="vision_llm_url" class="form-input"
+                                        placeholder="http://ollama:11434">
+                                    <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Standard:
+                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">http://ollama:11434</code>
+                                        (Ollama Docker-Container im selben Netzwerk). Oder
+                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">http://host.docker.internal:11434</code>
+                                        falls Ollama nativ auf dem Host läuft.
+                                    </p>
+                                </div>
+
+                                <div class="form-group" style="margin-top: 1.5rem;">
+                                    <label class="form-label">Modell</label>
+                                    <input type="text" id="vision_llm_model" class="form-input"
+                                        placeholder="moondream">
+                                    <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
+                                        Empfohlen:
+                                        <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;">moondream</code> (1.8B, ~1.7 GB RAM) —
+                                        klein genug für CPU-only, reicht für Kennzeichen völlig aus.
+                                        Wird beim ersten Aufruf automatisch heruntergeladen.
+                                    </p>
+                                </div>
+
+                                <div class="form-group" style="margin-top: 1.5rem;">
+                                    <label class="form-label">Confidence-Schwellwert (nur Hybrid-Modus)</label>
+                                    <input type="number" id="vision_llm_confidence_threshold" class="form-input"
+                                        placeholder="0.6" min="0" max="1" step="0.05" value="0.6">
+                                    <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
+                                        Liegt die Fast-ALPR-Confidence unter diesem Wert, wird das Vision-LLM als
+                                        Fallback aufgerufen. Standard: 0.6 (60%).
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Test Connection Button -->
+                            <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                <div style="display: flex; align-items: center; gap: 1rem;">
+                                    <button class="btn" type="button"
+                                        style="background: rgba(129, 140, 248, 0.15); color: #818cf8; border: 1px solid rgba(129, 140, 248, 0.3);"
+                                        @click="testConnection()">
+                                        Verbindung testen
+                                    </button>
+                                    <span x-show="testResult" x-text="testResult"
+                                        :style="testOk ? 'color: #34d399;' : 'color: #f87171;'"
+                                        style="font-size: 0.85rem;"></span>
+                                </div>
                             </div>
                         </form>
                     </div>
@@ -655,7 +739,7 @@
 
                             <!-- Stats Grid -->
                             <div
-                                style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.75rem;">
+                                style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; font-size: 0.75rem;">
                                 <div
                                     style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
                                     <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Analysiert</div>
@@ -668,6 +752,14 @@
                                     </div>
                                     <div style="color: #34d399; font-weight: 600;">🚗 <span
                                             x-text="status.detections || 0"></span></div>
+                                </div>
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Modus</div>
+                                    <div style="font-weight: 600;"
+                                        :style="status.recognition_mode === 'hybrid' ? 'color: #c084fc;' : status.recognition_mode === 'vision_llm' ? 'color: #f472b6;' : 'color: #60a5fa;'"
+                                        x-text="status.recognition_mode === 'hybrid' ? 'Hybrid' : status.recognition_mode === 'vision_llm' ? 'Vision LLM' : 'Fast ALPR'">
+                                    </div>
                                 </div>
                                 <div
                                     style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
@@ -910,6 +1002,7 @@
                 'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
                 'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_interval_mode', 'rtsp_camera_name', 'rtsp_roi_polygon',
+                'recognition_mode', 'vision_llm_url', 'vision_llm_model', 'vision_llm_confidence_threshold',
                 'cleanup_days_known', 'cleanup_days_unknown', 'folder_watch_enabled'
             ];
             let hasError = false;
@@ -956,6 +1049,48 @@
             } catch (e) {
                 showMsg('error', '✗ Verbindungsfehler');
             }
+        }
+
+        function recognitionPanel() {
+            return {
+                testResult: '',
+                testOk: false,
+
+                init() {
+                    // Settings are loaded by the global loadSettings() function
+                },
+
+                async testConnection() {
+                    this.testResult = 'Teste Verbindung...';
+                    this.testOk = false;
+                    const url = (document.getElementById('vision_llm_url').value || 'http://ollama:11434').replace(/\/$/, '');
+                    const model = document.getElementById('vision_llm_model').value || 'moondream';
+                    try {
+                        // First: check if Ollama is reachable (via backend proxy to avoid CORS)
+                        const res = await fetch(`${API_BASE}/vision_llm/test`, {
+                            method: 'POST',
+                            headers: headers(),
+                            body: JSON.stringify({ url: url, model: model })
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.success) {
+                                this.testResult = `Verbunden! Modell "${data.model}" verfügbar (${data.response_ms}ms)`;
+                                this.testOk = true;
+                            } else {
+                                this.testResult = data.error || 'Verbindung fehlgeschlagen';
+                                this.testOk = false;
+                            }
+                        } else {
+                            this.testResult = 'Backend-Fehler: ' + res.status;
+                            this.testOk = false;
+                        }
+                    } catch (e) {
+                        this.testResult = 'Netzwerkfehler: ' + e.message;
+                        this.testOk = false;
+                    }
+                }
+            };
         }
 
         function rtspPanel() {

@@ -7,6 +7,7 @@ from collections import deque
 import requests
 import re
 import uuid
+import base64
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 from database import SessionLocal
@@ -38,7 +39,7 @@ class MemoryLogHandler(logging.Handler):
             return
         try:
             entry = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now().isoformat(),
                 "level": record.levelname,
                 "source": record.name,
                 "message": self.format(record),
@@ -74,18 +75,48 @@ HA_SERVICE = os.getenv("HA_SERVICE", "/api/services/cover/open_cover")
 
 # --- OCR Post-Processing ---
 
+def normalize_plate_raw(plate_text: str) -> str:
+    """Strip a plate down to its raw alphanumeric form for comparison.
+    Removes dashes, spaces, and trailing E/H suffixes.
+    Example: 'MK-MS-255E' -> 'MKMS255', 'WI-A-123-H' -> 'WIA123'
+    """
+    plate_text = plate_text.upper()
+    plate_text = re.sub(r'[^A-ZÄÖÜ0-9]', '', plate_text)
+    # Strip trailing E (Elektro) or H (Historisch) suffix for comparison
+    plate_text = re.sub(r'[EH]$', '', plate_text)
+    return plate_text
+
 def apply_corrections(plate_text: str) -> str:
+    """Clean OCR output and auto-format into German plate format with dashes.
+    Handles trailing E (Elektro) and H (Historisch) suffixes.
+    Examples:
+      'MKMS255'   -> 'MK-MS-255'
+      'MKMS255E'  -> 'MK-MS-255E'
+      'WIA123H'   -> 'WI-A-123H'
+      'B AB 1234' -> 'B-AB-1234'
+    """
     plate_text = plate_text.upper()
     plate_text = re.sub(r'[^A-ZÄÖÜ0-9\-]', '', plate_text)
-    # Auto-format German plates missing dashes (e.g. MKMS255 -> MK-MS-255)
+
+    # Auto-format German plates missing dashes
     if '-' not in plate_text:
-        match = re.match(r'^([A-ZÄÖÜ]{1,3})([A-Z]{1,2})([0-9]{1,4})$', plate_text)
+        # Match with optional trailing E/H suffix (Elektro/Historisch)
+        match = re.match(r'^([A-ZÄÖÜ]{1,3})([A-Z]{1,2})([0-9]{1,4})([EH]?)$', plate_text)
         if match:
-            plate_text = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            district = match.group(1)
+            letters = match.group(2)
+            numbers = match.group(3)
+            suffix = match.group(4)  # 'E', 'H', or ''
+            plate_text = f"{district}-{letters}-{numbers}{suffix}"
+
+    # Fix plates that have dashes but E/H got separated by a dash (e.g. MK-MS-255-E -> MK-MS-255E)
+    plate_text = re.sub(r'-([EH])$', r'\1', plate_text)
+
     return plate_text
 
 def validate_plate(plate_text: str) -> bool:
-    pattern = r'^[A-ZÄÖÜ]{1,3}-[A-Z]{1,2}-[0-9]{1,4}$'
+    """Validate German plate format: XX-YY-1234 with optional E/H suffix."""
+    pattern = r'^[A-ZÄÖÜ]{1,3}-[A-Z]{1,2}-[0-9]{1,4}[EH]?$'
     return bool(re.match(pattern, plate_text))
 
 def parse_timestamp_from_filename(filename: str):
@@ -124,33 +155,40 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 
 def fuzzy_match_plate(detected_plate: str, threshold: float = 0.80) -> tuple:
     """Match detected plate against DB plates with fuzzy matching.
+    Comparison is done on RAW form (no dashes, no E/H suffix) so that
+    'MKMS255' matches 'MK-MS-255E' and 'WIA123' matches 'WI-A-123H'.
     Returns: (matched_plate_text | None, match_score | None, decision)
     """
     if not detected_plate or detected_plate == "UNKNOWN":
         return None, None, "denied"
-    
+
+    detected_raw = normalize_plate_raw(detected_plate)
+    if not detected_raw:
+        return None, None, "denied"
+
     db = SessionLocal()
     try:
         plates = db.query(models.Plate).filter(models.Plate.active == True).all()
         best_match = None
         best_score = 0.0
-        
+
         for plate in plates:
-            max_len = max(len(detected_plate), len(plate.plate_text))
+            plate_raw = normalize_plate_raw(plate.plate_text)
+            max_len = max(len(detected_raw), len(plate_raw))
             if max_len == 0:
                 continue
-            distance = levenshtein_distance(detected_plate, plate.plate_text)
+            distance = levenshtein_distance(detected_raw, plate_raw)
             score = 1.0 - (distance / max_len)
-            
+
             if score > best_score:
                 best_score = score
                 best_match = plate.plate_text
-        
+
         if best_match and best_score >= threshold:
-            logger.info(f"Fuzzy match: '{detected_plate}' -> '{best_match}' (score: {best_score:.2f})")
+            logger.info(f"Fuzzy match: '{detected_plate}' (raw: '{detected_raw}') -> '{best_match}' (score: {best_score:.2f})")
             return best_match, best_score, "allowed"
         else:
-            logger.info(f"No fuzzy match for '{detected_plate}' (best: {best_match}, score: {best_score:.2f})")
+            logger.info(f"No fuzzy match for '{detected_plate}' (raw: '{detected_raw}') (best: {best_match}, score: {best_score:.2f})")
             return None, None, "denied"
     finally:
         db.close()
@@ -211,22 +249,23 @@ def process_single_image(img_path: str) -> dict:
             results = data.get("results", [])
             processing_time_ms = data.get("processing_time_ms")
             
-            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms}
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
             for res in results:
                 plate_text = apply_corrections(res.get("plate", ""))
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
                     best = {
-                        "plate": plate_text, 
+                        "plate": plate_text,
                         "confidence": conf,
-                        "processing_time_ms": processing_time_ms
+                        "processing_time_ms": processing_time_ms,
+                        "source": "fast_alpr",
                     }
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for {img_path}")
     except Exception as e:
         logger.error(f"Error processing {img_path}: {e}")
-    return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
 
 def get_setting(db, key: str, default: str) -> str:
     s = db.query(models.Setting).filter(models.Setting.key == key).first()
@@ -297,7 +336,7 @@ def trigger_mqtt(plate_text: str) -> bool:
             client.username_pw_set(user, password)
         client.connect(broker, port, 5)
         from datetime import datetime # Import datetime here to avoid circular dependency if it's not already imported globally
-        payload = json.dumps({"plate": plate_text, "timestamp": datetime.utcnow().isoformat()})
+        payload = json.dumps({"plate": plate_text, "timestamp": datetime.now().isoformat()})
         client.publish(topic, payload)
         client.disconnect()
         logger.info(f"MQTT published to topic {topic}")
@@ -325,7 +364,8 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
             confidence=conf if has_plate else None,
             has_plate=has_plate,
             is_trigger=is_trigger,
-            processing_time_ms=result.get("processing_time_ms")
+            processing_time_ms=result.get("processing_time_ms"),
+            recognition_source=result.get("source", "fast_alpr"),
         )
         db.add(event_image)
         db.flush()
@@ -342,12 +382,49 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
 def process_first_image(folder_path: str, img_path: str):
     """FAST-FIRST: Process the first image immediately, create event, trigger HA if needed."""
     logger.info(f"⚡ FAST-FIRST: Processing {os.path.basename(img_path)} immediately")
-    
+
+    vlm_settings = _get_cached_vision_settings()
+    rec_mode = vlm_settings["recognition_mode"]
+    if rec_mode == "vision_llm":
+        rec_mode = "hybrid"
+
     result = process_single_image(img_path)
+
     plate = result.get("plate", "")
     conf = result.get("confidence", 0.0)
     proc_time = result.get("processing_time_ms")
-    
+
+    # Hybrid cascade: fast_alpr -> PaddleOCR -> Vision LLM
+    if rec_mode == "hybrid" and conf < vlm_settings["vision_llm_confidence_threshold"] and conf > 0:
+        # Stage 2: PaddleOCR
+        logger.info(f"Hybrid Stage 2 (PaddleOCR) for first image — confidence {conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}")
+        try:
+            with open(img_path, 'rb') as f:
+                jpeg_bytes = f.read()
+            paddle_result = analyze_with_paddleocr(jpeg_bytes)
+            if paddle_result.get("confidence", 0) > conf:
+                logger.info(f"PaddleOCR improved: '{plate}' -> '{paddle_result['plate']}' ({paddle_result.get('confidence', 0):.2f})")
+                result = paddle_result
+                plate = result.get("plate", "")
+                conf = result.get("confidence", 0.0)
+                proc_time = result.get("processing_time_ms")
+        except Exception as e:
+            logger.error(f"PaddleOCR fallback error: {e}")
+
+        # Stage 3: Vision LLM (only if PaddleOCR also didn't help enough)
+        if conf < vlm_settings["vision_llm_confidence_threshold"]:
+            logger.info(f"Hybrid Stage 3 (Vision LLM) — still low confidence {conf:.2f}")
+            try:
+                vlm_result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
+                if vlm_result.get("confidence", 0) > conf:
+                    logger.info(f"Vision LLM improved: '{plate}' -> '{vlm_result['plate']}'")
+                    result = vlm_result
+                    plate = result.get("plate", "")
+                    conf = result.get("confidence", 0.0)
+                    proc_time = result.get("processing_time_ms")
+            except Exception as e:
+                logger.error(f"Vision LLM fallback error: {e}")
+
     proc_str = f" | {proc_time}ms" if proc_time else ""
     logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
     
@@ -370,7 +447,7 @@ def process_first_image(folder_path: str, img_path: str):
             mqtt_triggered = trigger_mqtt(matched_plate or plate)
             
         if ha_triggered or mqtt_triggered:
-            trigger_ts = datetime.utcnow()
+            trigger_ts = datetime.now()
     
     # Create event in DB
     sid = str(uuid.uuid4())[:8]
@@ -388,7 +465,9 @@ def process_first_image(folder_path: str, img_path: str):
             ha_triggered=ha_triggered,
             mqtt_triggered=mqtt_triggered,
             trigger_timestamp=trigger_ts,
-            processing_time_ms=result.get("processing_time_ms")
+            processing_time_ms=result.get("processing_time_ms"),
+            recognition_source=rec_mode,
+            vlm_processing_time_ms=result.get("processing_time_ms") if result.get("source") == "vision_llm" else None,
         )
         db.add(new_event)
         db.flush()  # Get the ID without committing
@@ -469,6 +548,11 @@ def process_followup_images(folder_path: str):
     best_conf = series["best_confidence"]
     
     # Store per-image results for DB insertion
+    vlm_settings = _get_cached_vision_settings()
+    rec_mode = vlm_settings["recognition_mode"]
+    if rec_mode == "vision_llm":
+        rec_mode = "hybrid"
+
     image_results = []
     for img_path in process_list:
         result = process_single_image(img_path)
@@ -478,11 +562,50 @@ def process_followup_images(folder_path: str):
         proc_str = f" | {proc_time}ms" if proc_time else ""
         logger.info(f"  [{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
         image_results.append((img_path, result))
-        
+
         if conf > best_conf and plate:
             best_plate = plate
             best_conf = conf
-    
+
+    # Hybrid cascade: PaddleOCR -> Vision LLM (only if fast_alpr confidence is low)
+    if rec_mode == "hybrid" and best_conf < vlm_settings["vision_llm_confidence_threshold"] and best_conf > 0:
+        # Stage 2: PaddleOCR on the best frame
+        logger.info(f"Hybrid Stage 2 (PaddleOCR) for follow-up batch — confidence {best_conf:.2f}")
+        try:
+            best_img_path = image_results[0][0]  # First image
+            for img_path, res in image_results:
+                if res.get("confidence", 0) > 0:
+                    best_img_path = img_path
+                    break
+            if os.path.exists(best_img_path):
+                with open(best_img_path, 'rb') as f:
+                    paddle_bytes = f.read()
+                paddle_result = analyze_with_paddleocr(paddle_bytes)
+                if paddle_result.get("confidence", 0) > best_conf:
+                    best_plate = paddle_result["plate"]
+                    best_conf = paddle_result["confidence"]
+                    logger.info(f"PaddleOCR improved follow-up: '{best_plate}' ({best_conf:.2f})")
+        except Exception as e:
+            logger.error(f"PaddleOCR fallback error: {e}")
+
+        # Stage 3: Vision LLM with multiple frames (only if still low)
+        if best_conf < vlm_settings["vision_llm_confidence_threshold"]:
+            logger.info(f"Hybrid Stage 3 (Vision LLM) for follow-up batch — still low confidence {best_conf:.2f}")
+            try:
+                llm_frames = []
+                for img_path, result in image_results[:3]:
+                    if os.path.exists(img_path):
+                        with open(img_path, 'rb') as f:
+                            llm_frames.append(f.read())
+                if llm_frames:
+                    vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
+                    if vlm_result.get("confidence", 0) > best_conf:
+                        best_plate = vlm_result["plate"]
+                        best_conf = vlm_result["confidence"]
+                        logger.info(f"Vision LLM improved follow-up: '{best_plate}' ({best_conf:.2f})")
+            except Exception as e:
+                logger.error(f"Vision LLM fallback error: {e}")
+
     # Re-check fuzzy match with the improved plate
     matched_plate, match_score, decision = fuzzy_match_plate(best_plate)
     
@@ -567,7 +690,7 @@ def check_storage_cleanup():
             days_known = int(get_setting(db, "cleanup_days_known", "30"))
             days_unknown = int(get_setting(db, "cleanup_days_unknown", "2"))
             
-            now = datetime.utcnow()
+            now = datetime.now()
             cutoff_known = now - timedelta(days=days_known)
             cutoff_unknown = now - timedelta(days=days_unknown)
             
@@ -626,6 +749,7 @@ rtsp_status = {
     "interval_mode": "seconds",
     "interval_value": 3,
     "backpressure": False,         # True if analysis takes longer than interval
+    "recognition_mode": "fast_alpr",  # Current recognition mode
 }
 
 # Used to group identical vehicles into a single event instead of repeating DB writes
@@ -649,11 +773,29 @@ rtsp_mask_cache = {
     "polygon_str": "",
     "frame_shape": None,
     "mask": None,
-    "bbox": None # (x, y, w, h)
+    "bbox": None, # (x, y, w, h)
+    "cropped_mask": None, # mask cropped to bbox (for engine frame masking)
 }
 
 # Rolling average cache for processing times
 rtsp_processing_times = deque(maxlen=10)
+
+# --- Performance: Cached polygon setting (avoids DB query every frame) ---
+_polygon_setting_cache = {"value": "", "last_check": 0.0}
+_POLYGON_CACHE_TTL = 5.0  # seconds – polygon changes are rare, 5s is fine
+
+def _get_cached_polygon() -> str:
+    """Return the ROI polygon JSON string, refreshing from DB at most every 5 seconds."""
+    now = time.time()
+    if now - _polygon_setting_cache["last_check"] > _POLYGON_CACHE_TTL:
+        try:
+            db = SessionLocal()
+            _polygon_setting_cache["value"] = get_setting(db, "rtsp_roi_polygon", "")
+            db.close()
+        except Exception:
+            pass
+        _polygon_setting_cache["last_check"] = now
+    return _polygon_setting_cache["value"]
 
 # Tracks last-seen timestamp per plate to prevent spam events (e.g., parked cars)
 rtsp_cooldown = {}
@@ -671,7 +813,7 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
     debug_frame_counter += 1
     entry = {
         "id": debug_frame_counter,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "jpeg": jpeg_bytes,
         "plate": plate,
         "confidence": round(confidence, 3),
@@ -679,7 +821,7 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
     }
     debug_frame_buffer.append(entry)
     # Purge entries older than 1 hour
-    cutoff = datetime.utcnow() - timedelta(seconds=DEBUG_BUFFER_MAX_AGE_SECONDS)
+    cutoff = datetime.now() - timedelta(seconds=DEBUG_BUFFER_MAX_AGE_SECONDS)
     while debug_frame_buffer and datetime.fromisoformat(debug_frame_buffer[0]["timestamp"]) < cutoff:
         debug_frame_buffer.popleft()
 
@@ -692,18 +834,291 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
             data = response.json()
             results = data.get("results", [])
             processing_time_ms = data.get("processing_time_ms")
-            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms}
+            best = {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
             for res in results:
                 plate_text = apply_corrections(res.get("plate", ""))
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
-                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms}
+                    best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for RTSP frame")
     except Exception as e:
         logger.error(f"RTSP engine analysis error: {e}")
-    return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
+
+
+# --- PaddleOCR Backup Integration ---
+
+_paddle_ocr_instance = None
+_paddle_ocr_lock = threading.Lock()
+
+def _get_paddle_ocr():
+    """Lazy-initialize PaddleOCR (only loaded once, ~30 MB model download on first use)."""
+    global _paddle_ocr_instance
+    if _paddle_ocr_instance is None:
+        with _paddle_ocr_lock:
+            if _paddle_ocr_instance is None:
+                try:
+                    from paddleocr import PaddleOCR
+                    _paddle_ocr_instance = PaddleOCR(
+                        use_angle_cls=True,
+                        lang='en',  # Plates are alphanumeric
+                        show_log=False,
+                        use_gpu=False,
+                    )
+                    logger.info("PaddleOCR initialized successfully.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize PaddleOCR: {e}")
+    return _paddle_ocr_instance
+
+
+def analyze_with_paddleocr(jpeg_bytes: bytes) -> dict:
+    """Run PaddleOCR on a single JPEG image as backup OCR.
+
+    Returns:
+        {"plate": str, "confidence": float, "processing_time_ms": float, "source": "paddleocr"}
+    """
+    import numpy as np
+    import cv2
+
+    ocr = _get_paddle_ocr()
+    if ocr is None:
+        return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
+
+    start_time = time.time()
+    try:
+        # Decode JPEG to numpy array
+        img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if img is None:
+            return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
+
+        results = ocr.ocr(img, cls=True)
+        processing_time_ms = (time.time() - start_time) * 1000.0
+
+        if not results or not results[0]:
+            logger.info(f"PaddleOCR: no text detected ({processing_time_ms:.0f}ms)")
+            return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
+
+        # Find the best plate-like text among all detected text regions
+        best_plate = ""
+        best_conf = 0.0
+        for line in results[0]:
+            text = line[1][0].strip().upper()
+            conf = float(line[1][1])
+            # Clean: keep only alphanumeric
+            cleaned = re.sub(r'[^A-ZÄÖÜ0-9]', '', text)
+            # Plate-like: 4-12 chars, has both letters and digits
+            if 4 <= len(cleaned) <= 12 and re.search(r'[A-Z]', cleaned) and re.search(r'\d', cleaned):
+                if conf > best_conf:
+                    best_plate = cleaned
+                    best_conf = conf
+
+        if best_plate:
+            best_plate = apply_corrections(best_plate)
+            logger.info(f"PaddleOCR: plate='{best_plate}' conf={best_conf:.2f} ({processing_time_ms:.0f}ms)")
+            return {
+                "plate": best_plate,
+                "confidence": best_conf,
+                "processing_time_ms": processing_time_ms,
+                "source": "paddleocr",
+            }
+        else:
+            logger.info(f"PaddleOCR: no plate-like text found ({processing_time_ms:.0f}ms)")
+            return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
+
+    except Exception as e:
+        processing_time_ms = (time.time() - start_time) * 1000.0
+        logger.error(f"PaddleOCR error: {e}")
+        return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
+
+
+# --- Vision LLM Integration (Ollama) ---
+
+_VISION_LLM_PROMPT = (
+    "Look at this image of a vehicle or license plate. "
+    "Read the license plate number exactly as shown. "
+    "Return ONLY the plate text (letters and numbers), nothing else. "
+    "If you cannot read the plate, return UNKNOWN. "
+    "Example response: MK MS 255"
+)
+
+_VISION_LLM_MULTI_PROMPT = (
+    "These images show the same vehicle from a camera. "
+    "Read the license plate number from these images. "
+    "Combine information from all images for the best reading. "
+    "Return ONLY the plate text (letters and numbers), nothing else. "
+    "If you cannot read the plate, return UNKNOWN. "
+    "Example response: MK MS 255"
+)
+
+def _get_vision_llm_settings():
+    """Read Vision LLM settings from DB with defaults."""
+    db = SessionLocal()
+    try:
+        return {
+            "recognition_mode": get_setting(db, "recognition_mode", "fast_alpr"),
+            "vision_llm_url": get_setting(db, "vision_llm_url", os.getenv("OLLAMA_URL", "http://ollama:11434")),
+            "vision_llm_model": get_setting(db, "vision_llm_model", "moondream"),
+            "vision_llm_confidence_threshold": float(get_setting(db, "vision_llm_confidence_threshold", "0.6")),
+        }
+    finally:
+        db.close()
+
+# Cache for vision LLM settings (refreshed every 10 seconds)
+_vision_llm_cache = {"settings": None, "last_check": 0.0}
+_VISION_LLM_CACHE_TTL = 10.0
+
+def _get_cached_vision_settings():
+    """Return cached Vision LLM settings, refreshing from DB at most every 10 seconds."""
+    now = time.time()
+    if now - _vision_llm_cache["last_check"] > _VISION_LLM_CACHE_TTL or _vision_llm_cache["settings"] is None:
+        _vision_llm_cache["settings"] = _get_vision_llm_settings()
+        _vision_llm_cache["last_check"] = now
+    return _vision_llm_cache["settings"]
+
+
+def analyze_with_vision_llm(jpeg_frames: list, settings: dict = None) -> dict:
+    """Send one or more JPEG frames to a Vision LLM (Ollama) for plate recognition.
+
+    Args:
+        jpeg_frames: List of JPEG byte buffers (1-3 frames recommended)
+        settings: Vision LLM settings dict (if None, reads from cache)
+
+    Returns:
+        {"plate": str, "confidence": float, "processing_time_ms": float, "source": "vision_llm"}
+    """
+    if not settings:
+        settings = _get_cached_vision_settings()
+
+    ollama_url = settings["vision_llm_url"].rstrip("/")
+    model = settings["vision_llm_model"]
+
+    # Encode frames as base64
+    b64_images = []
+    for frame_bytes in jpeg_frames[:3]:  # Max 3 frames
+        b64_images.append(base64.b64encode(frame_bytes).decode("utf-8"))
+
+    prompt = _VISION_LLM_MULTI_PROMPT if len(b64_images) > 1 else _VISION_LLM_PROMPT
+
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": prompt,
+            "images": b64_images,
+        }],
+        "stream": False,
+        "options": {
+            "temperature": 0.1,  # Low temperature for deterministic output
+            "num_predict": 30,   # Plate text is short
+        }
+    }
+
+    start_time = time.time()
+    try:
+        response = requests.post(
+            f"{ollama_url}/api/chat",
+            json=payload,
+            timeout=30,  # Vision LLMs can be slow
+        )
+        processing_time_ms = (time.time() - start_time) * 1000.0
+
+        if response.status_code == 200:
+            data = response.json()
+            raw_text = data.get("message", {}).get("content", "").strip()
+
+            # Clean up the LLM response — extract only plate-like text
+            plate_text = _extract_plate_from_llm_response(raw_text)
+
+            if plate_text and plate_text != "UNKNOWN":
+                plate_text = apply_corrections(plate_text)
+                logger.info(f"Vision LLM ({model}): raw='{raw_text}' -> plate='{plate_text}' ({processing_time_ms:.0f}ms, {len(b64_images)} frames)")
+                return {
+                    "plate": plate_text,
+                    "confidence": 0.85,  # Vision LLM doesn't give numeric confidence; use a fixed high value
+                    "processing_time_ms": processing_time_ms,
+                    "source": "vision_llm",
+                }
+            else:
+                logger.info(f"Vision LLM ({model}): no plate found, raw='{raw_text}' ({processing_time_ms:.0f}ms)")
+                return {
+                    "plate": "UNKNOWN",
+                    "confidence": 0.0,
+                    "processing_time_ms": processing_time_ms,
+                    "source": "vision_llm",
+                }
+        else:
+            logger.error(f"Vision LLM API error {response.status_code}: {response.text[:200]}")
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Vision LLM: Cannot connect to {ollama_url} — is Ollama running?")
+    except requests.exceptions.Timeout:
+        logger.error(f"Vision LLM: Request timed out after 30s")
+    except Exception as e:
+        logger.error(f"Vision LLM error: {e}")
+
+    return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "vision_llm"}
+
+
+def _ensure_ollama_model():
+    """Pull the configured model if it's not already available in Ollama.
+    Called once at startup in a background thread so it doesn't block."""
+    try:
+        settings = _get_vision_llm_settings()
+        if settings["recognition_mode"] == "fast_alpr":
+            return  # No VLM needed
+        ollama_url = settings["vision_llm_url"].rstrip("/")
+        model = settings["vision_llm_model"]
+        # Check if model exists
+        resp = requests.get(f"{ollama_url}/api/tags", timeout=10)
+        if resp.status_code == 200:
+            models = [m["name"].split(":")[0] for m in resp.json().get("models", [])]
+            if model.split(":")[0] in models:
+                logger.info(f"Ollama model '{model}' already available.")
+                return
+        # Pull model
+        logger.info(f"Pulling Ollama model '{model}' (this may take a few minutes on first run)...")
+        pull_resp = requests.post(
+            f"{ollama_url}/api/pull",
+            json={"name": model, "stream": False},
+            timeout=600,  # Large timeout for first pull
+        )
+        if pull_resp.status_code == 200:
+            logger.info(f"Ollama model '{model}' pulled successfully.")
+        else:
+            logger.warning(f"Ollama pull returned {pull_resp.status_code}: {pull_resp.text[:200]}")
+    except requests.exceptions.ConnectionError:
+        logger.warning("Ollama not reachable — model pull skipped. Will retry when needed.")
+    except Exception as e:
+        logger.warning(f"Ollama model pull check failed: {e}")
+
+
+def _extract_plate_from_llm_response(raw_text: str) -> str:
+    """Extract a license plate string from potentially chatty LLM output.
+    The LLM might return 'The plate reads MK MS 255' instead of just 'MK MS 255'.
+    """
+    if not raw_text:
+        return "UNKNOWN"
+
+    text = raw_text.strip().upper()
+
+    # If the response is already short and clean, use it directly
+    cleaned = re.sub(r'[^A-ZÄÖÜ0-9]', '', text)
+    if 4 <= len(cleaned) <= 12:
+        return cleaned
+
+    # Try to find a plate-like pattern in longer text
+    # German plates: 1-3 letters, 1-2 letters, 1-4 digits, optional E/H
+    match = re.search(r'([A-ZÄÖÜ]{1,3})\s*[-–]?\s*([A-Z]{1,2})\s*[-–]?\s*(\d{1,4})\s*([EH]?)', text)
+    if match:
+        return f"{match.group(1)}{match.group(2)}{match.group(3)}{match.group(4)}"
+
+    # Fallback: just strip non-alphanumeric and hope for the best
+    if 4 <= len(cleaned) <= 12:
+        return cleaned
+
+    return "UNKNOWN"
 
 
 rtsp_latest_frame_data = None
@@ -852,88 +1267,120 @@ def rtsp_processor_thread():
                 continue
 
             # --- Analysis starts here ---
-            # ROI Masking (Mask out background)
-            db = SessionLocal()
-            try:
-                polygon_str = get_setting(db, "rtsp_roi_polygon", "")
-            except Exception:
-                polygon_str = ""
-            finally:
-                db.close()
-                
-            # Save unmasked frame first for the UI ROI Editor
-            s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if s_umb:
-                rtsp_unmasked_preview_frame = b_umb.tobytes()
+            _t0 = time.time()  # cycle start
+            _t_mask = 0
+            _t_enc = 0
+            _t_preview = 0
+            _t_engine = 0
+            _t_match = 0
+            _did_preview = False
+
+            # ROI Masking (optimized: crop-first, then mask small region)
+            polygon_str = _get_cached_polygon()  # cached, no DB query per frame
 
             if polygon_str:
                 try:
                     points = json.loads(polygon_str)
                     if len(points) >= 3:
                         h, w = frame.shape[:2]
-                        
+
                         # Cache mechanism: only rebuild mask if polygon or frame shape changed
-                        if (rtsp_mask_cache["polygon_str"] != polygon_str or 
+                        if (rtsp_mask_cache["polygon_str"] != polygon_str or
                             rtsp_mask_cache["frame_shape"] != frame.shape[:2]):
-                            
+
                             # Convert relative coordinates (0.0 to 1.0) to absolute pixels
                             poly_pts = np.array([
-                                [int(p["x"] * w), int(p["y"] * h)] 
+                                [int(p["x"] * w), int(p["y"] * h)]
                                 for p in points
                             ], np.int32)
                             poly_pts = poly_pts.reshape((-1, 1, 2))
-                            
+
                             logger.info(f"Rebuilding ROI Mask Cache! Shape: {frame.shape}, Points: {points}")
-                            
+
                             # Create black mask and draw white polygon
                             mask = np.zeros((h, w), dtype=np.uint8)
                             cv2.fillPoly(mask, [poly_pts], 255)
-                            
+
                             # Calculate Bounding Rect
                             x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
                             x_rect = max(0, x_rect)
                             y_rect = max(0, y_rect)
                             w_rect = min(w - x_rect, w_rect)
                             h_rect = min(h - y_rect, h_rect)
-                            
+
+                            # Pre-compute cropped mask for engine (avoids re-slicing every frame)
+                            cropped_mask = mask[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+
                             # Store in cache
                             rtsp_mask_cache["polygon_str"] = polygon_str
                             rtsp_mask_cache["frame_shape"] = frame.shape[:2]
                             rtsp_mask_cache["mask"] = mask
                             rtsp_mask_cache["bbox"] = (x_rect, y_rect, w_rect, h_rect)
+                            rtsp_mask_cache["cropped_mask"] = cropped_mask
 
-                        # Apply cached mask to original frame
-                        cached_mask = rtsp_mask_cache["mask"]
-                        frame[cached_mask == 0] = [0, 0, 0]
-                        
-                        # Crop frame using cached bbox
+                        # OPTIMIZED: Crop first (cheap numpy view), then mask only the small cropped region
                         x_rect, y_rect, w_rect, h_rect = rtsp_mask_cache["bbox"]
-                        frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+                        frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect].copy()
+                        cropped_mask = rtsp_mask_cache["cropped_mask"]
+                        # cv2.bitwise_and is SIMD-optimized and much faster than numpy boolean indexing
+                        frame_for_engine = cv2.bitwise_and(frame_for_engine, frame_for_engine, mask=cropped_mask)
+                        has_roi = True
                     else:
                         frame_for_engine = frame
+                        has_roi = False
                 except Exception as e:
                     import traceback
                     logger.error(f"Failed to apply ROI mask: {e}")
                     logger.error(traceback.format_exc())
                     frame_for_engine = frame
+                    has_roi = False
             else:
                 frame_for_engine = frame
+                has_roi = False
 
-            success, jpeg_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not success:
-                continue
-                
-            jpeg_bytes = jpeg_buf.tobytes()
-            rtsp_preview_frame = jpeg_bytes  # Always update latest GUI preview frame
-            
-            # Encode specifically for the engine (cropped if mask exists)
+            _t_mask = time.time() - _t0
+
+            # Resize ROI crop to max 640px width for YOLO (model expects 640px input anyway)
+            # This avoids sending oversized crops while preserving detail from the full-res source
+            eh, ew = frame_for_engine.shape[:2]
+            YOLO_MAX_WIDTH = 640
+            if ew > YOLO_MAX_WIDTH:
+                scale = YOLO_MAX_WIDTH / ew
+                new_w = YOLO_MAX_WIDTH
+                new_h = int(eh * scale)
+                frame_for_engine = cv2.resize(frame_for_engine, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                logger.debug(f"Resized ROI crop {ew}x{eh} -> {new_w}x{new_h} for engine")
+
+            # Single JPEG encode: only the engine frame (the part that matters)
+            _t_enc_start = time.time()
             success_eng, eng_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not success_eng:
                 continue
             engine_bytes = eng_buf.tobytes()
+            _t_enc = time.time() - _t_enc_start
+
+            # Preview updates: rate-limited to max 2 FPS (saves 1-2 full-frame JPEG encodes per analysis)
+            _now_preview = time.time()
+            if _now_preview - rtsp_status.get("_last_preview_time", 0) > 0.5:
+                _t_prev_start = time.time()
+                _did_preview = True
+                rtsp_status["_last_preview_time"] = _now_preview
+                # Unmasked preview for ROI editor
+                s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if s_umb:
+                    rtsp_unmasked_preview_frame = b_umb.tobytes()
+                # Masked preview for live view
+                if has_roi:
+                    preview = cv2.bitwise_and(frame, frame, mask=rtsp_mask_cache["mask"])
+                    s_prev, b_prev = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if s_prev:
+                        rtsp_preview_frame = b_prev.tobytes()
+                else:
+                    rtsp_preview_frame = b_umb.tobytes() if s_umb else rtsp_preview_frame
+                _t_preview = time.time() - _t_prev_start
             
             rtsp_status["frames_analyzed"] += 1
-            rtsp_status["last_capture"] = datetime.utcnow().isoformat()
+            rtsp_status["last_capture"] = datetime.now().isoformat()
             
             # FPS tracking
             now = time.time()
@@ -943,9 +1390,19 @@ def rtsp_processor_thread():
                 elapsed = capture_times[-1] - capture_times[0]
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
+            # --- Recognition mode selection ---
+            vlm_settings = _get_cached_vision_settings()
+            rec_mode = vlm_settings["recognition_mode"]
+            # "vision_llm" pure mode removed — treat as "hybrid" (VLM only as fallback)
+            if rec_mode == "vision_llm":
+                rec_mode = "hybrid"
+            rtsp_status["recognition_mode"] = rec_mode
+
             analysis_start = time.time()
+            # Always use fast_alpr first; hybrid fallback happens at session finalization
             result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
             analysis_duration = time.time() - analysis_start
+            _t_engine = analysis_duration
 
             plate = result.get("plate", "")
             confidence = result.get("confidence", 0.0)
@@ -967,7 +1424,9 @@ def rtsp_processor_thread():
 
             # Handle detection
             if is_real_plate:
+                _t_match_start = time.time()
                 matched_plate, match_score, decision = fuzzy_match_plate(plate)
+                _t_match = time.time() - _t_match_start
                 match_score_val = match_score if match_score is not None else 0.0
                 
                 # If no active session, start one
@@ -1001,15 +1460,16 @@ def rtsp_processor_thread():
                     mq_ok = trigger_mqtt(rtsp_active_session["best_plate"])
                     rtsp_active_session["has_triggered"] = ha_ok or mq_ok
                     if rtsp_active_session["has_triggered"]:
-                        rtsp_active_session["trigger_timestamp"] = datetime.utcnow()
+                        rtsp_active_session["trigger_timestamp"] = datetime.now()
                         
                 # Add current frame to session gallery
                 rtsp_active_session["images"].append({
-                    "jpeg_bytes": jpeg_bytes,
+                    "jpeg_bytes": engine_bytes,
                     "plate": plate,
                     "confidence": confidence,
                     "proc_ms": proc_ms,
-                    "has_plate": True
+                    "has_plate": True,
+                    "source": result.get("source", "fast_alpr"),
                 })
                 
                 rtsp_status["state"] = "connected"
@@ -1022,11 +1482,12 @@ def rtsp_processor_thread():
                 # If we are in an active session, add empty frames up to a limit (so gallery shows the car leaving)
                 if rtsp_active_session["is_active"] and len(rtsp_active_session["images"]) < 10:
                      rtsp_active_session["images"].append({
-                        "jpeg_bytes": jpeg_bytes,
+                        "jpeg_bytes": engine_bytes,
                         "plate": "UNKNOWN",
                         "confidence": 0.0,
                         "proc_ms": proc_ms,
-                        "has_plate": False
+                        "has_plate": False,
+                        "source": rec_mode,
                     })
                 
                 # Update status UI
@@ -1047,10 +1508,40 @@ def rtsp_processor_thread():
                 s_conf = rtsp_active_session["best_conf"]
                 s_dec = rtsp_active_session["decision"]
                 s_imgs = rtsp_active_session["images"]
-                
+
+                # --- HYBRID CASCADE: PaddleOCR -> Vision LLM fallback ---
+                if rec_mode == "hybrid" and s_conf < vlm_settings["vision_llm_confidence_threshold"]:
+                    # Pick best frame for PaddleOCR
+                    plate_frames = [img["jpeg_bytes"] for img in s_imgs if img.get("has_plate")]
+                    all_frames = [img["jpeg_bytes"] for img in s_imgs]
+                    best_frame = (plate_frames or all_frames)[0] if (plate_frames or all_frames) else None
+
+                    # Stage 2: PaddleOCR
+                    if best_frame:
+                        logger.info(f"📹 RTSP: Hybrid Stage 2 (PaddleOCR) — confidence {s_conf:.2f}")
+                        paddle_result = analyze_with_paddleocr(best_frame)
+                        if paddle_result.get("plate") and paddle_result.get("confidence", 0) > s_conf:
+                            logger.info(f"📹 RTSP: PaddleOCR improved: '{s_plate}' -> '{paddle_result['plate']}' ({paddle_result['confidence']:.2f})")
+                            s_plate = paddle_result["plate"]
+                            s_conf = paddle_result["confidence"]
+
+                    # Stage 3: Vision LLM (only if PaddleOCR didn't help enough)
+                    if s_conf < vlm_settings["vision_llm_confidence_threshold"]:
+                        llm_frames = (plate_frames or all_frames)[:3]
+                        if llm_frames:
+                            logger.info(f"📹 RTSP: Hybrid Stage 3 (Vision LLM) — still low confidence {s_conf:.2f}")
+                            vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
+                            vlm_plate = vlm_result.get("plate", "")
+                            vlm_conf = vlm_result.get("confidence", 0.0)
+                            rtsp_active_session["vlm_processing_time_ms"] = vlm_result.get("processing_time_ms")
+                            if vlm_plate and vlm_plate != "UNKNOWN" and vlm_conf > s_conf:
+                                logger.info(f"📹 RTSP: Vision LLM improved: '{s_plate}' -> '{vlm_plate}' ({vlm_conf:.2f})")
+                                s_plate = vlm_plate
+                                s_conf = vlm_conf
+
                 # Re-do match just to be safe it's correct for the final selected plate
                 s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)
-                
+
                 logger.info(f"📹 RTSP: Finalizing session for '{s_plate}' after 20s timeout. {len(s_imgs)} frames collected.")
                 
                 rtsp_status["detections"] += 1
@@ -1059,18 +1550,23 @@ def rtsp_processor_thread():
                 
                 db = SessionLocal()
                 try:
+                    # Calculate VLM time if hybrid fallback was used
+                    _vlm_time = rtsp_active_session.get("vlm_processing_time_ms")
+
                     event = models.Event(
-                        timestamp=datetime.utcnow(),
+                        timestamp=datetime.now(),
                         detected_plate=s_plate,
                         confidence=f"{s_conf:.4f}",
                         decision=s_dec_final,
-                        series_id=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                        series_id=f"rtsp_{cam_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                         image_count=len(s_imgs),
                         matched_plate=s_matched_plate,
                         match_score=s_match_score,
                         ha_triggered=rtsp_active_session.get("has_triggered", False),
                         trigger_timestamp=rtsp_active_session.get("trigger_timestamp"),
-                        processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None
+                        processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None,
+                        recognition_source=rec_mode,
+                        vlm_processing_time_ms=_vlm_time,
                     )
                     db.add(event)
                     db.flush()
@@ -1078,13 +1574,14 @@ def rtsp_processor_thread():
                     for i, img_data in enumerate(s_imgs):
                         event_image = models.EventImage(
                             event_id=event.id,
-                            filename=f"rtsp_{cam_name}_{datetime.utcnow().strftime('%H%M%S')}_{i}.jpg",
+                            filename=f"rtsp_{cam_name}_{datetime.now().strftime('%H%M%S')}_{i}.jpg",
                             image_data=img_data["jpeg_bytes"],
                             detected_plate=img_data["plate"],
                             confidence=img_data["confidence"],
                             has_plate=img_data["has_plate"],
-                            is_trigger=(i == 0), # Just mark the first one as trigger for the star icon
-                            processing_time_ms=img_data["proc_ms"]
+                            is_trigger=(i == 0),
+                            processing_time_ms=img_data["proc_ms"],
+                            recognition_source=img_data.get("source", "fast_alpr"),
                         )
                         db.add(event_image)
                     
@@ -1111,11 +1608,35 @@ def rtsp_processor_thread():
                     "has_triggered": False
                 }
 
-            if mode == "seconds" and analysis_duration > val:
+            _t_total = time.time() - _t0
+            if mode == "seconds" and _t_total > val:
                 rtsp_status["backpressure"] = True
-                logger.warning(f"📹 RTSP: Analysis took {analysis_duration:.1f}s but interval is {val}s")
             else:
                 rtsp_status["backpressure"] = False
+
+            # Performance logging: DEBUG for every frame, WARNING only for sustained backpressure
+            _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
+            _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
+            _total_ms = int(_t_total * 1000)
+
+            # Track consecutive slow frames for real backpressure detection
+            _interval_ms = int(val * 1000) if mode == "seconds" and val > 0 else 5000
+            if _total_ms > _interval_ms:
+                rtsp_status["_slow_frames"] = rtsp_status.get("_slow_frames", 0) + 1
+            else:
+                rtsp_status["_slow_frames"] = 0
+
+            # Only warn if 3+ consecutive frames exceed the interval (real backpressure)
+            if rtsp_status.get("_slow_frames", 0) >= 3:
+                parts = [
+                    f"BACKPRESSURE {_total_ms}ms (limit {_interval_ms}ms, {rtsp_status['_slow_frames']}x slow)",
+                    f"engine={_eng_ms}(net={_net_ms})",
+                    f"plate={plate or '-'}",
+                ]
+                logger.warning(f"📹 {' | '.join(parts)}")
+            else:
+                # Normal performance trace at DEBUG level (won't flood logs)
+                logger.debug(f"📹 cycle {_total_ms}ms | engine={_eng_ms} | plate={plate or '-'}")
 
         except Exception as e:
             logger.error(f"📹 RTSP Processor Error: {e}")
@@ -1321,6 +1842,10 @@ def start_watcher():
             for series_imgs in series_groups:
                 process_startup_series(folder_path, series_imgs)
     
+    # Ensure Ollama model is available (background, non-blocking)
+    ollama_pull_thread = threading.Thread(target=_ensure_ollama_model, daemon=True)
+    ollama_pull_thread.start()
+
     # Start series expiry and cleanup background threads
     expiry_thread = threading.Thread(target=check_series_expiry, daemon=True)
     expiry_thread.start()

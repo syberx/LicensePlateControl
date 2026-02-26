@@ -277,7 +277,7 @@
 
 <body>
     <nav class="nav">
-        <div class="nav-brand">License<span>Plate</span>Control</div>
+        <div class="nav-brand">License<span>Plate</span>Control <span style="font-size:0.6rem;font-weight:400;color:rgba(255,255,255,0.3);margin-left:0.4rem;">v1.2.0</span></div>
         <div class="nav-links">
             <a href="/" class="nav-link">Dashboard</a>
             <a href="/plates.html" class="nav-link">Kennzeichen</a>
@@ -392,7 +392,7 @@
 
                 formatTime(isoStr) {
                     if (!isoStr) return '';
-                    const d = new Date(isoStr + 'Z');
+                    const d = new Date(isoStr);
                     return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' '
                         + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 }
