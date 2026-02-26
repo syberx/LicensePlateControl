@@ -18,6 +18,7 @@ services:
       - lpc-network
 
   backend:
+    image: ghcr.io/syberx/lpc-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -44,6 +45,7 @@ services:
       - lpc-network
 
   engine:
+    image: ghcr.io/syberx/lpc-engine:latest
     build:
       context: ./engine
       dockerfile: Dockerfile
@@ -67,6 +69,7 @@ services:
       - lpc-network
 
   frontend:
+    image: ghcr.io/syberx/lpc-frontend:latest
     build:
       context: ./frontend
       dockerfile: Dockerfile
