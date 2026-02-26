@@ -35,11 +35,9 @@ services:
       - HA_URL=http://homeassistant.local:8123
       - HA_TOKEN=optional_long_lived_access_token
       - HA_SERVICE=/api/services/cover/open_cover
-      - OLLAMA_URL=http://ollama:11434
     depends_on:
       - engine
       - postgres
-      - ollama
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -68,29 +66,6 @@ services:
     networks:
       - lpc-network
 
-  # Optional: Vision-LLM Fallback via Ollama (nur für Hybrid-Modus)
-  # Nutzt moondream (1.8B, ~1.7 GB RAM) — läuft auch ohne GPU rein auf CPU.
-  # Wird NUR aufgerufen wenn Fast ALPR unsicher ist (Hybrid-Modus in Settings).
-  ollama:
-    image: ollama/ollama:latest
-    container_name: licenseplatecontrol-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      - TZ=Europe/Berlin
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_MAX_LOADED_MODELS=1
-    deploy:
-      resources:
-        limits:
-          memory: 3G    # moondream braucht ~1.7 GB, Limit auf 3 GB
-    networks:
-      - lpc-network
-
   frontend:
     build:
       context: ./frontend
@@ -111,7 +86,6 @@ services:
 
 volumes:
   pgdata:
-  ollama_data:
 
 
 networks:
