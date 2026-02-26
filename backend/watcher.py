@@ -394,21 +394,36 @@ def process_first_image(folder_path: str, img_path: str):
     conf = result.get("confidence", 0.0)
     proc_time = result.get("processing_time_ms")
 
-    # Hybrid fallback: if fast_alpr confidence is low, try Vision LLM
+    # Hybrid cascade: fast_alpr -> PaddleOCR -> Vision LLM
     if rec_mode == "hybrid" and conf < vlm_settings["vision_llm_confidence_threshold"] and conf > 0:
-        logger.info(f"Hybrid fallback for first image — confidence {conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}")
+        # Stage 2: PaddleOCR
+        logger.info(f"Hybrid Stage 2 (PaddleOCR) for first image — confidence {conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}")
         try:
             with open(img_path, 'rb') as f:
                 jpeg_bytes = f.read()
-            vlm_result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
-            if vlm_result.get("confidence", 0) > conf:
-                logger.info(f"Vision LLM improved: '{plate}' -> '{vlm_result['plate']}'")
-                result = vlm_result
+            paddle_result = analyze_with_paddleocr(jpeg_bytes)
+            if paddle_result.get("confidence", 0) > conf:
+                logger.info(f"PaddleOCR improved: '{plate}' -> '{paddle_result['plate']}' ({paddle_result.get('confidence', 0):.2f})")
+                result = paddle_result
                 plate = result.get("plate", "")
                 conf = result.get("confidence", 0.0)
                 proc_time = result.get("processing_time_ms")
         except Exception as e:
-            logger.error(f"Hybrid Vision LLM fallback error: {e}")
+            logger.error(f"PaddleOCR fallback error: {e}")
+
+        # Stage 3: Vision LLM (only if PaddleOCR also didn't help enough)
+        if conf < vlm_settings["vision_llm_confidence_threshold"]:
+            logger.info(f"Hybrid Stage 3 (Vision LLM) — still low confidence {conf:.2f}")
+            try:
+                vlm_result = analyze_with_vision_llm([jpeg_bytes], vlm_settings)
+                if vlm_result.get("confidence", 0) > conf:
+                    logger.info(f"Vision LLM improved: '{plate}' -> '{vlm_result['plate']}'")
+                    result = vlm_result
+                    plate = result.get("plate", "")
+                    conf = result.get("confidence", 0.0)
+                    proc_time = result.get("processing_time_ms")
+            except Exception as e:
+                logger.error(f"Vision LLM fallback error: {e}")
 
     proc_str = f" | {proc_time}ms" if proc_time else ""
     logger.info(f"[{os.path.basename(img_path)}] Detected: {plate} (Conf: {conf:.2f}){proc_str}")
@@ -552,23 +567,44 @@ def process_followup_images(folder_path: str):
             best_plate = plate
             best_conf = conf
 
-    # Hybrid fallback: if best confidence is still low, try Vision LLM with best frames
+    # Hybrid cascade: PaddleOCR -> Vision LLM (only if fast_alpr confidence is low)
     if rec_mode == "hybrid" and best_conf < vlm_settings["vision_llm_confidence_threshold"] and best_conf > 0:
-        logger.info(f"Hybrid fallback for follow-up batch — confidence {best_conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}")
+        # Stage 2: PaddleOCR on the best frame
+        logger.info(f"Hybrid Stage 2 (PaddleOCR) for follow-up batch — confidence {best_conf:.2f}")
         try:
-            llm_frames = []
-            for img_path, result in image_results[:3]:
-                if os.path.exists(img_path):
-                    with open(img_path, 'rb') as f:
-                        llm_frames.append(f.read())
-            if llm_frames:
-                vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
-                if vlm_result.get("confidence", 0) > best_conf:
-                    best_plate = vlm_result["plate"]
-                    best_conf = vlm_result["confidence"]
-                    logger.info(f"Vision LLM improved follow-up: '{best_plate}' ({best_conf:.2f})")
+            best_img_path = image_results[0][0]  # First image
+            for img_path, res in image_results:
+                if res.get("confidence", 0) > 0:
+                    best_img_path = img_path
+                    break
+            if os.path.exists(best_img_path):
+                with open(best_img_path, 'rb') as f:
+                    paddle_bytes = f.read()
+                paddle_result = analyze_with_paddleocr(paddle_bytes)
+                if paddle_result.get("confidence", 0) > best_conf:
+                    best_plate = paddle_result["plate"]
+                    best_conf = paddle_result["confidence"]
+                    logger.info(f"PaddleOCR improved follow-up: '{best_plate}' ({best_conf:.2f})")
         except Exception as e:
-            logger.error(f"Hybrid Vision LLM fallback error: {e}")
+            logger.error(f"PaddleOCR fallback error: {e}")
+
+        # Stage 3: Vision LLM with multiple frames (only if still low)
+        if best_conf < vlm_settings["vision_llm_confidence_threshold"]:
+            logger.info(f"Hybrid Stage 3 (Vision LLM) for follow-up batch — still low confidence {best_conf:.2f}")
+            try:
+                llm_frames = []
+                for img_path, result in image_results[:3]:
+                    if os.path.exists(img_path):
+                        with open(img_path, 'rb') as f:
+                            llm_frames.append(f.read())
+                if llm_frames:
+                    vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
+                    if vlm_result.get("confidence", 0) > best_conf:
+                        best_plate = vlm_result["plate"]
+                        best_conf = vlm_result["confidence"]
+                        logger.info(f"Vision LLM improved follow-up: '{best_plate}' ({best_conf:.2f})")
+            except Exception as e:
+                logger.error(f"Vision LLM fallback error: {e}")
 
     # Re-check fuzzy match with the improved plate
     matched_plate, match_score, decision = fuzzy_match_plate(best_plate)
@@ -810,6 +846,92 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
     except Exception as e:
         logger.error(f"RTSP engine analysis error: {e}")
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr"}
+
+
+# --- PaddleOCR Backup Integration ---
+
+_paddle_ocr_instance = None
+_paddle_ocr_lock = threading.Lock()
+
+def _get_paddle_ocr():
+    """Lazy-initialize PaddleOCR (only loaded once, ~30 MB model download on first use)."""
+    global _paddle_ocr_instance
+    if _paddle_ocr_instance is None:
+        with _paddle_ocr_lock:
+            if _paddle_ocr_instance is None:
+                try:
+                    from paddleocr import PaddleOCR
+                    _paddle_ocr_instance = PaddleOCR(
+                        use_angle_cls=True,
+                        lang='en',  # Plates are alphanumeric
+                        show_log=False,
+                        use_gpu=False,
+                    )
+                    logger.info("PaddleOCR initialized successfully.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize PaddleOCR: {e}")
+    return _paddle_ocr_instance
+
+
+def analyze_with_paddleocr(jpeg_bytes: bytes) -> dict:
+    """Run PaddleOCR on a single JPEG image as backup OCR.
+
+    Returns:
+        {"plate": str, "confidence": float, "processing_time_ms": float, "source": "paddleocr"}
+    """
+    import numpy as np
+    import cv2
+
+    ocr = _get_paddle_ocr()
+    if ocr is None:
+        return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
+
+    start_time = time.time()
+    try:
+        # Decode JPEG to numpy array
+        img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if img is None:
+            return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
+
+        results = ocr.ocr(img, cls=True)
+        processing_time_ms = (time.time() - start_time) * 1000.0
+
+        if not results or not results[0]:
+            logger.info(f"PaddleOCR: no text detected ({processing_time_ms:.0f}ms)")
+            return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
+
+        # Find the best plate-like text among all detected text regions
+        best_plate = ""
+        best_conf = 0.0
+        for line in results[0]:
+            text = line[1][0].strip().upper()
+            conf = float(line[1][1])
+            # Clean: keep only alphanumeric
+            cleaned = re.sub(r'[^A-ZÄÖÜ0-9]', '', text)
+            # Plate-like: 4-12 chars, has both letters and digits
+            if 4 <= len(cleaned) <= 12 and re.search(r'[A-Z]', cleaned) and re.search(r'\d', cleaned):
+                if conf > best_conf:
+                    best_plate = cleaned
+                    best_conf = conf
+
+        if best_plate:
+            best_plate = apply_corrections(best_plate)
+            logger.info(f"PaddleOCR: plate='{best_plate}' conf={best_conf:.2f} ({processing_time_ms:.0f}ms)")
+            return {
+                "plate": best_plate,
+                "confidence": best_conf,
+                "processing_time_ms": processing_time_ms,
+                "source": "paddleocr",
+            }
+        else:
+            logger.info(f"PaddleOCR: no plate-like text found ({processing_time_ms:.0f}ms)")
+            return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
+
+    except Exception as e:
+        processing_time_ms = (time.time() - start_time) * 1000.0
+        logger.error(f"PaddleOCR error: {e}")
+        return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
 
 
 # --- Vision LLM Integration (Ollama) ---
@@ -1387,23 +1509,35 @@ def rtsp_processor_thread():
                 s_dec = rtsp_active_session["decision"]
                 s_imgs = rtsp_active_session["images"]
 
-                # --- HYBRID MODE: Vision LLM fallback on low confidence ---
+                # --- HYBRID CASCADE: PaddleOCR -> Vision LLM fallback ---
                 if rec_mode == "hybrid" and s_conf < vlm_settings["vision_llm_confidence_threshold"]:
-                    logger.info(f"📹 RTSP: Hybrid fallback — confidence {s_conf:.2f} < {vlm_settings['vision_llm_confidence_threshold']}, trying Vision LLM...")
-                    # Pick best 2-3 frames (prefer those with plate detections)
+                    # Pick best frame for PaddleOCR
                     plate_frames = [img["jpeg_bytes"] for img in s_imgs if img.get("has_plate")]
                     all_frames = [img["jpeg_bytes"] for img in s_imgs]
-                    llm_frames = (plate_frames or all_frames)[:3]
+                    best_frame = (plate_frames or all_frames)[0] if (plate_frames or all_frames) else None
 
-                    if llm_frames:
-                        vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
-                        vlm_plate = vlm_result.get("plate", "")
-                        vlm_conf = vlm_result.get("confidence", 0.0)
-                        rtsp_active_session["vlm_processing_time_ms"] = vlm_result.get("processing_time_ms")
-                        if vlm_plate and vlm_plate != "UNKNOWN" and vlm_conf > s_conf:
-                            logger.info(f"📹 RTSP: Vision LLM improved plate: '{s_plate}' ({s_conf:.2f}) -> '{vlm_plate}' ({vlm_conf:.2f})")
-                            s_plate = vlm_plate
-                            s_conf = vlm_conf
+                    # Stage 2: PaddleOCR
+                    if best_frame:
+                        logger.info(f"📹 RTSP: Hybrid Stage 2 (PaddleOCR) — confidence {s_conf:.2f}")
+                        paddle_result = analyze_with_paddleocr(best_frame)
+                        if paddle_result.get("plate") and paddle_result.get("confidence", 0) > s_conf:
+                            logger.info(f"📹 RTSP: PaddleOCR improved: '{s_plate}' -> '{paddle_result['plate']}' ({paddle_result['confidence']:.2f})")
+                            s_plate = paddle_result["plate"]
+                            s_conf = paddle_result["confidence"]
+
+                    # Stage 3: Vision LLM (only if PaddleOCR didn't help enough)
+                    if s_conf < vlm_settings["vision_llm_confidence_threshold"]:
+                        llm_frames = (plate_frames or all_frames)[:3]
+                        if llm_frames:
+                            logger.info(f"📹 RTSP: Hybrid Stage 3 (Vision LLM) — still low confidence {s_conf:.2f}")
+                            vlm_result = analyze_with_vision_llm(llm_frames, vlm_settings)
+                            vlm_plate = vlm_result.get("plate", "")
+                            vlm_conf = vlm_result.get("confidence", 0.0)
+                            rtsp_active_session["vlm_processing_time_ms"] = vlm_result.get("processing_time_ms")
+                            if vlm_plate and vlm_plate != "UNKNOWN" and vlm_conf > s_conf:
+                                logger.info(f"📹 RTSP: Vision LLM improved: '{s_plate}' -> '{vlm_plate}' ({vlm_conf:.2f})")
+                                s_plate = vlm_plate
+                                s_conf = vlm_conf
 
                 # Re-do match just to be safe it's correct for the final selected plate
                 s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)

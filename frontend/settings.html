@@ -527,8 +527,8 @@
                     <div class="settings-card">
                         <h3>Erkennungsmodus</h3>
                         <p class="desc">Wähle, wie Kennzeichen erkannt werden. Das Standard-Modell (Fast ALPR) nutzt
-                            YOLO + OCR. Optional kann ein lokal gehostetes Vision-LLM (z.B. via Ollama) für
-                            schwierige Fälle hinzugezogen werden.</p>
+                            YOLO + OCR. Im Hybrid-Modus wird bei unsicheren Ergebnissen automatisch eine
+                            3-Stufen-Kaskade (Fast ALPR → PaddleOCR → Vision-LLM) durchlaufen.</p>
 
                         <form id="recognition-form" onsubmit="return false;">
                             <div class="form-group" style="margin-top: 1.5rem;">
@@ -539,10 +539,11 @@
                                     <option value="hybrid">Hybrid (Fast ALPR + LLM-Fallback bei Unsicherheit)</option>
                                 </select>
                                 <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
-                                    <strong>Fast ALPR:</strong> Schnell (~50ms), YOLO-Erkennung + CCT-OCR. Kein LLM nötig.<br>
-                                    <strong>Hybrid:</strong> Fast ALPR zuerst. Nur wenn die Confidence unter dem
-                                    Schwellwert liegt, werden 2-3 Frames an ein kleines Vision-LLM (moondream, ~1.7 GB)
-                                    geschickt. Das LLM wird also selten aufgerufen und nur als Fallback.
+                                    <strong>Fast ALPR:</strong> Schnell (~50ms), YOLO-Erkennung + CCT-OCR. Kein Fallback.<br>
+                                    <strong>Hybrid (3-Stufen-Kaskade):</strong><br>
+                                    &nbsp;&nbsp;1. Fast ALPR (~50ms) — immer zuerst<br>
+                                    &nbsp;&nbsp;2. PaddleOCR (~100ms) — wenn Confidence zu niedrig<br>
+                                    &nbsp;&nbsp;3. Vision-LLM (~1-3s) — nur wenn beide OCR-Engines unsicher sind
                                 </p>
                             </div>
 

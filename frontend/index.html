@@ -714,12 +714,10 @@
                                         <span x-show="e.recognition_source === 'fast_alpr' || !e.recognition_source"
                                             style="color: #60a5fa;">Fast ALPR</span>
                                         <span x-show="e.recognition_source === 'hybrid'"
-                                            style="color: #c084fc;">Hybrid</span>
-                                        <span x-show="e.recognition_source === 'vision_llm'"
-                                            style="color: #f472b6;">Vision LLM</span>
+                                            style="color: #c084fc;">Hybrid (3-Stufen)</span>
                                         <template x-if="e.vlm_processing_time_ms">
                                             <span style="color: rgba(255,255,255,0.4); margin-left: 0.5rem;"
-                                                x-text="'(LLM: ' + Number(e.vlm_processing_time_ms).toFixed(0) + ' ms)'"></span>
+                                                x-text="'(Fallback: ' + Number(e.vlm_processing_time_ms).toFixed(0) + ' ms)'"></span>
                                         </template>
                                     </span>
                                 </div>
