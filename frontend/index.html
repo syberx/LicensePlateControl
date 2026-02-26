@@ -459,6 +459,25 @@
             border-bottom-left-radius: 4px;
         }
 
+        .thumb-crop {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            max-width: 60%;
+            max-height: 35%;
+            border: 1px solid #34d399;
+            border-radius: 3px;
+            background: #000;
+            cursor: pointer;
+            z-index: 3;
+            box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
+        }
+
+        .thumb-crop:hover {
+            transform: scale(1.8);
+            z-index: 10;
+        }
+
         /* Trigger star indicator */
         .trigger-star {
             position: absolute;
@@ -756,6 +775,12 @@
                                             </template>
                                             <template x-if="img.has_plate && img.detected_plate">
                                                 <div class="thumb-plate-label" x-text="img.detected_plate"></div>
+                                            </template>
+                                            <template x-if="img.has_crop">
+                                                <img class="thumb-crop"
+                                                    :src="'/api/images/db/' + img.id + '/crop'"
+                                                    loading="lazy" alt="Plate crop"
+                                                    @click.stop="openLightbox('/api/images/db/' + img.id + '/crop')">
                                             </template>
                                             <template x-if="img.processing_time_ms">
                                                 <div class="thumb-time-label"
