@@ -925,7 +925,13 @@ rtsp_frame_lock = threading.Lock()
 def rtsp_reader_thread():
     """Producer Thread: Reads frames from RTSP as fast as possible to prevent FFMPEG buffering lag."""
     global rtsp_status, rtsp_latest_frame_data
-    import cv2
+    try:
+        import cv2
+    except ImportError as e:
+        logger.error(f"📹 RTSP Reader: cv2 import failed — {e}")
+        rtsp_status["state"] = "error"
+        rtsp_status["message"] = f"OpenCV fehlt: {e}"
+        return
     cap = None
     current_url = None
     consecutive_fails = 0
@@ -1024,8 +1030,12 @@ def rtsp_processor_thread():
     """Consumer Thread: Wakes up based on interval settings, grabs latest frame, analyzes it."""
     global rtsp_status, rtsp_preview_frame, rtsp_unmasked_preview_frame, rtsp_latest_frame_data, rtsp_active_session
     global rtsp_mask_cache, rtsp_processing_times
-    import cv2
-    import numpy as np
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as e:
+        logger.error(f"📹 RTSP Processor: cv2/numpy import failed — {e}")
+        return
     import json
     capture_times = []
     last_frame_grabbed = 0
