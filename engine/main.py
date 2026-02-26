@@ -12,6 +12,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 import cv2
 cv2.setNumThreads(2)
 import numpy as np
+import base64
 import time
 import traceback
 
@@ -88,6 +89,8 @@ async def analyze_image(file: UploadFile = File(...)):
             for res in results:
                 plate_text = ""
                 confidence = 0.0
+                crop_b64 = None
+                bbox = None
 
                 if hasattr(res, 'ocr') and hasattr(res.ocr, 'text'):
                     plate_text = res.ocr.text
@@ -96,14 +99,42 @@ async def analyze_image(file: UploadFile = File(...)):
                     plate_text = res.get('plate', "")
                     confidence = res.get('confidence', 0.0)
 
+                # Extract bounding box and crop plate region
+                if hasattr(res, 'detection'):
+                    det = res.detection
+                    if hasattr(det, 'bounding_box'):
+                        bb = det.bounding_box
+                        # bounding_box may be [x1,y1,x2,y2] or an object
+                        if hasattr(bb, 'x1'):
+                            x1, y1, x2, y2 = int(bb.x1), int(bb.y1), int(bb.x2), int(bb.y2)
+                        elif isinstance(bb, (list, tuple)) and len(bb) == 4:
+                            x1, y1, x2, y2 = int(bb[0]), int(bb[1]), int(bb[2]), int(bb[3])
+                        else:
+                            x1, y1, x2, y2 = None, None, None, None
+
+                        if x1 is not None:
+                            h, w = img.shape[:2]
+                            x1, y1 = max(0, x1), max(0, y1)
+                            x2, y2 = min(w, x2), min(h, y2)
+                            bbox = [x1, y1, x2, y2]
+                            crop = img[y1:y2, x1:x2]
+                            if crop.size > 0:
+                                _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                crop_b64 = base64.b64encode(buf.tobytes()).decode('ascii')
+
                 plate_text = str(plate_text).strip()
                 if not plate_text:
                     plate_text = "UNKNOWN"
 
-                output.append({
+                entry = {
                     "plate": plate_text,
-                    "confidence": confidence
-                })
+                    "confidence": confidence,
+                }
+                if bbox:
+                    entry["bbox"] = bbox
+                if crop_b64:
+                    entry["crop_b64"] = crop_b64
+                output.append(entry)
             return {"results": output, "processing_time_ms": processing_time_ms}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"ALPR prediction failed: {str(e)}")

@@ -365,6 +365,7 @@ def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger
             is_trigger=is_trigger,
             processing_time_ms=result.get("processing_time_ms"),
             recognition_source=result.get("source", "fast_alpr"),
+            plate_crop_data=result.get("crop_jpeg"),
         )
         db.add(event_image)
         db.flush()
@@ -786,7 +787,10 @@ def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None)
         debug_frame_buffer.popleft()
 
 def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
-    """Send JPEG bytes to the engine API and return the best plate result."""
+    """Send JPEG bytes to the engine API and return the best plate result.
+
+    Returns dict with keys: plate, confidence, processing_time_ms, source, crop_jpeg (optional bytes)
+    """
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
         response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
@@ -800,6 +804,13 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
                 conf = float(res.get("confidence", 0.0))
                 if conf > best["confidence"]:
                     best = {"plate": plate_text, "confidence": conf, "processing_time_ms": processing_time_ms, "source": "fast_alpr"}
+                    # Decode plate crop if engine returned one
+                    crop_b64 = res.get("crop_b64")
+                    if crop_b64:
+                        import base64
+                        best["crop_jpeg"] = base64.b64decode(crop_b64)
+                    else:
+                        best["crop_jpeg"] = None
             return best
         else:
             logger.error(f"Engine API error {response.status_code} for RTSP frame")
@@ -1245,7 +1256,7 @@ def rtsp_processor_thread():
                     rtsp_active_session["decision"] = decision
                     rtsp_active_session["has_triggered"] = False
                     rtsp_active_session["trigger_timestamp"] = None
-                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}'")
+                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}' (conf={confidence:.2f}, mode={rec_mode})")
                 else:
                     # Update active session timer
                     rtsp_active_session["last_seen_time"] = now_str
@@ -1275,6 +1286,7 @@ def rtsp_processor_thread():
                     "proc_ms": proc_ms,
                     "has_plate": True,
                     "source": result.get("source", "fast_alpr"),
+                    "crop_jpeg": result.get("crop_jpeg"),
                 })
                 
                 rtsp_status["state"] = "connected"
@@ -1315,6 +1327,7 @@ def rtsp_processor_thread():
                 s_imgs = rtsp_active_session["images"]
 
                 # --- HYBRID CASCADE: PaddleOCR fallback ---
+                logger.info(f"📹 RTSP: Finalize check — mode={rec_mode}, best_conf={s_conf:.2f}, threshold={cascade_settings['confidence_threshold']}")
                 if rec_mode == "hybrid" and s_conf < cascade_settings["confidence_threshold"]:
                     plate_frames = [img["jpeg_bytes"] for img in s_imgs if img.get("has_plate")]
                     all_frames = [img["jpeg_bytes"] for img in s_imgs]
@@ -1367,6 +1380,7 @@ def rtsp_processor_thread():
                             is_trigger=(i == 0),
                             processing_time_ms=img_data["proc_ms"],
                             recognition_source=img_data.get("source", "fast_alpr"),
+                            plate_crop_data=img_data.get("crop_jpeg"),
                         )
                         db.add(event_image)
                     
