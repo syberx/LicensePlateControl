@@ -74,18 +74,48 @@ HA_SERVICE = os.getenv("HA_SERVICE", "/api/services/cover/open_cover")
 
 # --- OCR Post-Processing ---
 
+def normalize_plate_raw(plate_text: str) -> str:
+    """Strip a plate down to its raw alphanumeric form for comparison.
+    Removes dashes, spaces, and trailing E/H suffixes.
+    Example: 'MK-MS-255E' -> 'MKMS255', 'WI-A-123-H' -> 'WIA123'
+    """
+    plate_text = plate_text.upper()
+    plate_text = re.sub(r'[^A-ZÄÖÜ0-9]', '', plate_text)
+    # Strip trailing E (Elektro) or H (Historisch) suffix for comparison
+    plate_text = re.sub(r'[EH]$', '', plate_text)
+    return plate_text
+
 def apply_corrections(plate_text: str) -> str:
+    """Clean OCR output and auto-format into German plate format with dashes.
+    Handles trailing E (Elektro) and H (Historisch) suffixes.
+    Examples:
+      'MKMS255'   -> 'MK-MS-255'
+      'MKMS255E'  -> 'MK-MS-255E'
+      'WIA123H'   -> 'WI-A-123H'
+      'B AB 1234' -> 'B-AB-1234'
+    """
     plate_text = plate_text.upper()
     plate_text = re.sub(r'[^A-ZÄÖÜ0-9\-]', '', plate_text)
-    # Auto-format German plates missing dashes (e.g. MKMS255 -> MK-MS-255)
+
+    # Auto-format German plates missing dashes
     if '-' not in plate_text:
-        match = re.match(r'^([A-ZÄÖÜ]{1,3})([A-Z]{1,2})([0-9]{1,4})$', plate_text)
+        # Match with optional trailing E/H suffix (Elektro/Historisch)
+        match = re.match(r'^([A-ZÄÖÜ]{1,3})([A-Z]{1,2})([0-9]{1,4})([EH]?)$', plate_text)
         if match:
-            plate_text = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            district = match.group(1)
+            letters = match.group(2)
+            numbers = match.group(3)
+            suffix = match.group(4)  # 'E', 'H', or ''
+            plate_text = f"{district}-{letters}-{numbers}{suffix}"
+
+    # Fix plates that have dashes but E/H got separated by a dash (e.g. MK-MS-255-E -> MK-MS-255E)
+    plate_text = re.sub(r'-([EH])$', r'\1', plate_text)
+
     return plate_text
 
 def validate_plate(plate_text: str) -> bool:
-    pattern = r'^[A-ZÄÖÜ]{1,3}-[A-Z]{1,2}-[0-9]{1,4}$'
+    """Validate German plate format: XX-YY-1234 with optional E/H suffix."""
+    pattern = r'^[A-ZÄÖÜ]{1,3}-[A-Z]{1,2}-[0-9]{1,4}[EH]?$'
     return bool(re.match(pattern, plate_text))
 
 def parse_timestamp_from_filename(filename: str):
@@ -124,33 +154,40 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 
 def fuzzy_match_plate(detected_plate: str, threshold: float = 0.80) -> tuple:
     """Match detected plate against DB plates with fuzzy matching.
+    Comparison is done on RAW form (no dashes, no E/H suffix) so that
+    'MKMS255' matches 'MK-MS-255E' and 'WIA123' matches 'WI-A-123H'.
     Returns: (matched_plate_text | None, match_score | None, decision)
     """
     if not detected_plate or detected_plate == "UNKNOWN":
         return None, None, "denied"
-    
+
+    detected_raw = normalize_plate_raw(detected_plate)
+    if not detected_raw:
+        return None, None, "denied"
+
     db = SessionLocal()
     try:
         plates = db.query(models.Plate).filter(models.Plate.active == True).all()
         best_match = None
         best_score = 0.0
-        
+
         for plate in plates:
-            max_len = max(len(detected_plate), len(plate.plate_text))
+            plate_raw = normalize_plate_raw(plate.plate_text)
+            max_len = max(len(detected_raw), len(plate_raw))
             if max_len == 0:
                 continue
-            distance = levenshtein_distance(detected_plate, plate.plate_text)
+            distance = levenshtein_distance(detected_raw, plate_raw)
             score = 1.0 - (distance / max_len)
-            
+
             if score > best_score:
                 best_score = score
                 best_match = plate.plate_text
-        
+
         if best_match and best_score >= threshold:
-            logger.info(f"Fuzzy match: '{detected_plate}' -> '{best_match}' (score: {best_score:.2f})")
+            logger.info(f"Fuzzy match: '{detected_plate}' (raw: '{detected_raw}') -> '{best_match}' (score: {best_score:.2f})")
             return best_match, best_score, "allowed"
         else:
-            logger.info(f"No fuzzy match for '{detected_plate}' (best: {best_match}, score: {best_score:.2f})")
+            logger.info(f"No fuzzy match for '{detected_plate}' (raw: '{detected_raw}') (best: {best_match}, score: {best_score:.2f})")
             return None, None, "denied"
     finally:
         db.close()
@@ -942,6 +979,17 @@ def rtsp_processor_thread():
                 has_roi = False
 
             _t_mask = time.time() - _t0
+
+            # Resize ROI crop to max 640px width for YOLO (model expects 640px input anyway)
+            # This avoids sending oversized crops while preserving detail from the full-res source
+            eh, ew = frame_for_engine.shape[:2]
+            YOLO_MAX_WIDTH = 640
+            if ew > YOLO_MAX_WIDTH:
+                scale = YOLO_MAX_WIDTH / ew
+                new_w = YOLO_MAX_WIDTH
+                new_h = int(eh * scale)
+                frame_for_engine = cv2.resize(frame_for_engine, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                logger.debug(f"Resized ROI crop {ew}x{eh} -> {new_w}x{new_h} for engine")
 
             # Single JPEG encode: only the engine frame (the part that matters)
             _t_enc_start = time.time()

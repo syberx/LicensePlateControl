@@ -83,10 +83,15 @@ class SettingResponse(BaseModel):
 
 @router.post("/api/plates", response_model=PlateResponse)
 def create_plate(plate: PlateCreate, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
-    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == plate.plate_text).first()
+    from watcher import apply_corrections, validate_plate
+    # Normalize plate text (auto-insert dashes, handle E/H suffix)
+    normalized = apply_corrections(plate.plate_text)
+    if not validate_plate(normalized):
+        raise HTTPException(status_code=400, detail=f"Ungültiges Format: '{plate.plate_text}' -> '{normalized}'. Erwartet: XX-YY-1234 (optional E/H)")
+    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == normalized).first()
     if db_plate:
-        raise HTTPException(status_code=400, detail="Plate already registered")
-    new_plate = models.Plate(plate_text=plate.plate_text, description=plate.description)
+        raise HTTPException(status_code=400, detail="Kennzeichen bereits registriert")
+    new_plate = models.Plate(plate_text=normalized, description=plate.description)
     db.add(new_plate)
     db.commit()
     db.refresh(new_plate)
@@ -128,14 +133,18 @@ def delete_plate(plate_id: int, db: Session = Depends(get_db), api_key: str = De
 
 @router.post("/api/external/plates", response_model=PlateResponse)
 def external_push_plate(plate: PlateCreate, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
-    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == plate.plate_text).first()
+    from watcher import apply_corrections, validate_plate
+    normalized = apply_corrections(plate.plate_text)
+    if not validate_plate(normalized):
+        raise HTTPException(status_code=400, detail=f"Ungültiges Format: '{plate.plate_text}'. Erwartet: XX-YY-1234 (optional E/H)")
+    db_plate = db.query(models.Plate).filter(models.Plate.plate_text == normalized).first()
     if db_plate:
         db_plate.active = True
         db.commit()
         db.refresh(db_plate)
         return db_plate
-    
-    new_plate = models.Plate(plate_text=plate.plate_text, description=plate.description)
+
+    new_plate = models.Plate(plate_text=normalized, description=plate.description)
     db.add(new_plate)
     db.commit()
     db.refresh(new_plate)
