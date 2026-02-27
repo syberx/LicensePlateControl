@@ -506,11 +506,6 @@
                                 <input type="number" id="mqtt_port" class="form-input" placeholder="1883" value="1883">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Topic</label>
-                                <input type="text" id="mqtt_topic" class="form-input" placeholder="lpc/plate_detected"
-                                    value="lpc/plate_detected">
-                            </div>
-                            <div class="form-group">
                                 <label class="form-label">Benutzername (Optional)</label>
                                 <input type="text" id="mqtt_user" class="form-input" placeholder="mqttuser">
                             </div>
@@ -518,7 +513,29 @@
                                 <label class="form-label">Passwort (Optional)</label>
                                 <input type="password" id="mqtt_pass" class="form-input" placeholder="••••••••">
                             </div>
+                            <div class="form-group">
+                                <label class="form-label">Legacy Topic (einfacher Trigger)</label>
+                                <input type="text" id="mqtt_topic" class="form-input" placeholder="licenseplatecontrol/plate_detected"
+                                    value="licenseplatecontrol/plate_detected">
+                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">Für einfache Automationen. Home Assistant Discovery nutzt automatisch <code>licenseplatecontrol/&lt;kameraname&gt;/...</code></p>
+                            </div>
                         </form>
+
+                        <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2); border-radius: 10px;">
+                            <div style="font-weight: 600; color: #a5b4fc; margin-bottom: 0.75rem;">🏠 Home Assistant Auto-Discovery</div>
+                            <p class="desc" style="margin-bottom: 0.75rem;">Nach dem Speichern wird in HA automatisch ein Gerät <strong>„Kennzeichen &lt;Kameraname&gt;"</strong> mit folgenden Entitäten angelegt:</p>
+                            <div style="font-size: 0.75rem; font-family: monospace; background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 6px; color: rgba(255,255,255,0.7); line-height: 1.8;">
+                                <span style="color:#60a5fa;">binary_sensor</span> · RTSP Stream (connected/offline)<br>
+                                <span style="color:#60a5fa;">sensor</span> · Ø Engine-Zeit (ms)<br>
+                                <span style="color:#34d399;">sensor</span> · Letztes Kennzeichen + Attribute<br>
+                                <span style="color:#34d399;">sensor</span> · Entscheidung (allowed / denied)<br>
+                                <span style="color:#4ade80;">sensor</span> · Erlaubtes Kennzeichen (retain)<br>
+                                <span style="color:#f87171;">sensor</span> · Unbekanntes Kennzeichen (retain)
+                            </div>
+                            <p class="desc" style="margin-top: 0.75rem; margin-bottom: 0;">
+                                <strong>HA Automation Beispiel:</strong> Trigger auf <code>sensor.kennzeichen_einfahrt_entscheidung</code> → State = <code>allowed</code> → Tor öffnen.
+                            </p>
+                        </div>
                     </div>
                 </div>
 

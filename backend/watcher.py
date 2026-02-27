@@ -338,44 +338,246 @@ def trigger_ha(plate_text: str) -> bool:
         logger.error(f"Home Assistant trigger failed: {e}")
         return False
 
+# ===========================================================================
+# MQTT Manager — persistente Verbindung + Home Assistant Auto-Discovery
+# ===========================================================================
+# Gerät in HA: "Kennzeichen <camera_name>"
+# Topics: licenseplatecontrol/<camera_name>/...
+#   availability          → online/offline (LWT)
+#   rtsp/state            → connected/offline
+#   rtsp/avg_ms           → Ø Engine-Zeit (ms)
+#   detection/last        → JSON: letztes Kennzeichen (immer)
+#   detection/allowed     → JSON: letztes erlaubtes Kennzeichen
+#   detection/unknown     → JSON: letztes unbekanntes Kennzeichen
+
+_mqttm_client: object = None   # paho.Client (persistent, loop_start)
+_mqttm_lock = threading.Lock()
+_mqttm_broker_key = ""         # "<broker>:<port>" — Reconnect-Erkennung
+_mqttm_last_status = 0.0
+_MQTT_STATUS_INTERVAL = 10.0   # Status-Publish alle 10s
+
+
+def _mqttm_base(cam: str) -> str:
+    return f"licenseplatecontrol/{cam.strip().lower()}"
+
+
+def _mqttm_read_settings() -> dict:
+    db = SessionLocal()
+    try:
+        return {
+            "broker":   get_setting(db, "mqtt_broker", ""),
+            "port":     int(get_setting(db, "mqtt_port", "1883")),
+            "user":     get_setting(db, "mqtt_user", ""),
+            "password": get_setting(db, "mqtt_pass", ""),
+            "enabled":  get_setting(db, "mqtt_enabled", "false").lower() == "true",
+            "cam":      get_setting(db, "rtsp_camera_name", "einfahrt"),
+        }
+    finally:
+        db.close()
+
+
+def _mqttm_publish_discovery(client, cam: str):
+    """Publiziert MQTT Auto-Discovery Payloads — HA erkennt das Gerät automatisch."""
+    base   = _mqttm_base(cam)
+    avail  = f"{base}/availability"
+    dev_id = f"lpc_{cam.strip().lower()}"
+    device = {
+        "identifiers": [dev_id],
+        "name":         f"Kennzeichen {cam.capitalize()}",
+        "model":        "LicensePlateControl",
+        "manufacturer": "syberx",
+    }
+
+    entities = [
+        ("binary_sensor", "rtsp", {
+            "name":           "RTSP Stream",
+            "state_topic":    f"{base}/rtsp/state",
+            "payload_on":     "connected",
+            "payload_off":    "offline",
+            "device_class":   "connectivity",
+            "icon":           "mdi:video-outline",
+        }),
+        ("sensor", "engine_ms", {
+            "name":               "Ø Engine-Zeit",
+            "state_topic":        f"{base}/rtsp/avg_ms",
+            "unit_of_measurement": "ms",
+            "state_class":        "measurement",
+            "icon":               "mdi:timer-outline",
+        }),
+        ("sensor", "last_plate", {
+            "name":                   "Letztes Kennzeichen",
+            "state_topic":            f"{base}/detection/last",
+            "value_template":         "{{ value_json.plate }}",
+            "json_attributes_topic":  f"{base}/detection/last",
+            "icon":                   "mdi:car",
+        }),
+        ("sensor", "decision", {
+            "name":           "Entscheidung",
+            "state_topic":    f"{base}/detection/last",
+            "value_template": "{{ value_json.decision }}",
+            "icon":           "mdi:shield-half-full",
+        }),
+        ("sensor", "last_allowed", {
+            "name":                   "Erlaubtes Kennzeichen",
+            "state_topic":            f"{base}/detection/allowed",
+            "value_template":         "{{ value_json.plate }}",
+            "json_attributes_topic":  f"{base}/detection/allowed",
+            "icon":                   "mdi:boom-gate-up-outline",
+        }),
+        ("sensor", "last_unknown", {
+            "name":                   "Unbekanntes Kennzeichen",
+            "state_topic":            f"{base}/detection/unknown",
+            "value_template":         "{{ value_json.plate }}",
+            "json_attributes_topic":  f"{base}/detection/unknown",
+            "icon":                   "mdi:help-circle-outline",
+        }),
+    ]
+
+    for platform, obj_id, cfg in entities:
+        cfg["unique_id"]          = f"{dev_id}_{obj_id}"
+        cfg["device"]             = device
+        cfg["availability_topic"] = avail
+        disc_topic = f"homeassistant/{platform}/{dev_id}/{obj_id}/config"
+        client.publish(disc_topic, json.dumps(cfg, ensure_ascii=False), retain=True)
+
+    client.publish(avail, "online", retain=True)
+    logger.info(f"MQTT Discovery publiziert — Gerät: 'Kennzeichen {cam.capitalize()}'")
+
+
+def _mqttm_ensure():
+    """Gibt (client, cam) zurück oder (None, '') wenn MQTT deaktiviert/nicht konfiguriert.
+    Stellt die persistente Verbindung her und reconnected bei Bedarf."""
+    global _mqttm_client, _mqttm_broker_key
+
+    s = _mqttm_read_settings()
+    if not s["enabled"] or not s["broker"]:
+        return None, ""
+
+    broker_key = f"{s['broker']}:{s['port']}"
+
+    with _mqttm_lock:
+        # Bereits verbunden mit dem richtigen Broker?
+        if _mqttm_client is not None and _mqttm_broker_key == broker_key:
+            try:
+                if _mqttm_client.is_connected():
+                    return _mqttm_client, s["cam"]
+            except Exception:
+                pass  # Neu verbinden
+
+        # Alte Verbindung aufräumen
+        if _mqttm_client is not None:
+            try:
+                _mqttm_client.loop_stop()
+                _mqttm_client.disconnect()
+            except Exception:
+                pass
+
+        try:
+            cam  = s["cam"]
+            base = _mqttm_base(cam)
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                                 client_id=f"lpc_{cam.strip().lower()}_client")
+            if s["user"]:
+                client.username_pw_set(s["user"], s["password"])
+            # LWT: bei unerwarteter Trennung "offline" setzen
+            client.will_set(f"{base}/availability", "offline", retain=True)
+            client.connect(s["broker"], s["port"], keepalive=60)
+            client.loop_start()
+
+            _mqttm_publish_discovery(client, cam)
+
+            _mqttm_client    = client
+            _mqttm_broker_key = broker_key
+            return client, cam
+
+        except Exception as e:
+            logger.error(f"MQTT Verbindung fehlgeschlagen: {e}")
+            _mqttm_client    = None
+            _mqttm_broker_key = ""
+            return None, ""
+
+
+def mqtt_publish_status(rtsp_state: str, avg_ms):
+    """Publiziert RTSP-Status + Ø Engine-Zeit. Wird vom RTSP-Processor alle 10s aufgerufen."""
+    global _mqttm_last_status
+    now = time.time()
+    if now - _mqttm_last_status < _MQTT_STATUS_INTERVAL:
+        return
+    _mqttm_last_status = now
+
+    client, cam = _mqttm_ensure()
+    if client is None:
+        return
+
+    base      = _mqttm_base(cam)
+    state_val = "connected" if rtsp_state == "connected" else "offline"
+    try:
+        client.publish(f"{base}/rtsp/state", state_val)
+        if avg_ms is not None:
+            client.publish(f"{base}/rtsp/avg_ms", str(int(avg_ms)))
+    except Exception as e:
+        logger.warning(f"MQTT Status publish: {e}")
+
+
+def mqtt_publish_detection(plate: str, decision: str, confidence: float, matched_plate: str = ""):
+    """Publiziert ein Erkennungs-Event auf die strukturierten Topics (kein Cooldown).
+    Wird bei jeder neuen Fahrzeug-Session aufgerufen.
+    HA-Automationen können auf detection/allowed reagieren um das Tor zu öffnen."""
+    client, cam = _mqttm_ensure()
+    if client is None:
+        return
+
+    base    = _mqttm_base(cam)
+    payload = json.dumps({
+        "plate":         plate,
+        "matched_plate": matched_plate or plate,
+        "decision":      decision,
+        "confidence":    round(confidence, 3),
+        "timestamp":     datetime.now().isoformat(),
+    }, ensure_ascii=False)
+
+    try:
+        client.publish(f"{base}/detection/last", payload, retain=True)
+        if decision == "allowed":
+            client.publish(f"{base}/detection/allowed", payload, retain=True)
+            logger.info(f"MQTT: detection/allowed → {plate}")
+        else:
+            client.publish(f"{base}/detection/unknown", payload, retain=True)
+            logger.info(f"MQTT: detection/unknown → {plate}")
+    except Exception as e:
+        logger.warning(f"MQTT Detection publish: {e}")
+
+
 def trigger_mqtt(plate_text: str) -> bool:
-    """Publish detected plate to MQTT broker, with cooldown."""
+    """Legacy-Trigger mit Cooldown (für file-watcher Pfad + HA-Trigger Kompatibilität).
+    Nutzt die persistente MQTT-Verbindung statt connect/disconnect."""
     now = time.time()
     if plate_text in last_mqtt_trigger:
         elapsed = now - last_mqtt_trigger[plate_text]
         if elapsed < MQTT_COOLDOWN:
             logger.info(f"MQTT trigger skipped for '{plate_text}' — cooldown ({MQTT_COOLDOWN - elapsed:.0f}s remaining)")
             return False
-            
+
+    client, cam = _mqttm_ensure()
+    if client is None:
+        logger.info("MQTT trigger skipped — nicht konfiguriert oder deaktiviert")
+        return False
+
+    # Legacy-Topic aus Settings (Kompatibilität)
     db = SessionLocal()
     try:
-        broker = get_setting(db, "mqtt_broker", "")
-        port = int(get_setting(db, "mqtt_port", "1883"))
-        user = get_setting(db, "mqtt_user", "")
-        password = get_setting(db, "mqtt_pass", "")
-        topic = get_setting(db, "mqtt_topic", "licenseplatecontrol/plate_detected")
+        legacy_topic = get_setting(db, "mqtt_topic", "licenseplatecontrol/plate_detected")
     finally:
         db.close()
-        
-    if not broker:
-        logger.info("MQTT trigger skipped — no broker configured")
-        return False
-        
+
     try:
-        logger.info(f"Publishing MQTT for plate '{plate_text}'...")
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-        if user:
-            client.username_pw_set(user, password)
-        client.connect(broker, port, 5)
-        from datetime import datetime # Import datetime here to avoid circular dependency if it's not already imported globally
         payload = json.dumps({"plate": plate_text, "timestamp": datetime.now().isoformat()})
-        client.publish(topic, payload)
-        client.disconnect()
-        logger.info(f"MQTT published to topic {topic}")
+        client.publish(legacy_topic, payload)
         last_mqtt_trigger[plate_text] = now
+        logger.info(f"MQTT trigger: '{plate_text}' → {legacy_topic}")
         return True
     except Exception as e:
-        logger.error(f"MQTT trigger failed: {e}")
+        logger.error(f"MQTT trigger fehlgeschlagen: {e}")
         return False
 
 def store_image_in_db(db, event_id: int, img_path: str, result: dict, is_trigger: bool = False):
@@ -1189,12 +1391,15 @@ def rtsp_processor_thread():
             proc_ms = result.get("processing_time_ms")
 
             # Engine-Zeit IMMER tracken — auch ohne Plate-Detection.
-            # detect_ms ist die reine YOLO-Zeit, die für Backpressure entscheidend ist.
             engine_ms = proc_ms if proc_ms else detect_ms
+            avg_ms_val = None
             if engine_ms:
                 rtsp_processing_times.append(engine_ms)
-                avg_ms = sum(rtsp_processing_times) / len(rtsp_processing_times)
-                rtsp_status["last_processing_ms"] = round(avg_ms, 1)
+                avg_ms_val = sum(rtsp_processing_times) / len(rtsp_processing_times)
+                rtsp_status["last_processing_ms"] = round(avg_ms_val, 1)
+
+            # MQTT Status alle 10s publizieren (Ø Engine-Zeit + RTSP-State)
+            mqtt_publish_status(rtsp_status["state"], avg_ms_val)
 
             # Store in debug buffer (showing exactly what the engine saw)
             _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=engine_ms)
@@ -1220,9 +1425,13 @@ def rtsp_processor_thread():
                     rtsp_active_session["best_conf"] = confidence
                     rtsp_active_session["best_match_score"] = match_score_val
                     rtsp_active_session["decision"] = decision
+                    rtsp_active_session["matched_plate"] = matched_plate or ""
                     rtsp_active_session["has_triggered"] = False
                     rtsp_active_session["trigger_timestamp"] = None
-                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}' (conf={confidence:.2f})")
+                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}' (conf={confidence:.2f}, decision={decision})")
+                    # Immer publizieren — auch unbekannte Fahrzeuge werden in HA sichtbar
+                    if decision != "allowed":
+                        mqtt_publish_detection(plate, decision, confidence, matched_plate or "")
                 else:
                     # Update active session timer
                     rtsp_active_session["last_seen_time"] = now_str
@@ -1235,14 +1444,20 @@ def rtsp_processor_thread():
                         rtsp_active_session["decision"] = decision
                 
                 # --- FAST-FIRST TRIGGER LOGIC ---
-                # Check if we should trigger immediately instead of waiting for 20s timeout
-                if rtsp_active_session["decision"] == "ALLOWED" and not rtsp_active_session["has_triggered"]:
+                # Beim ersten Match der Session: HA + MQTT triggern
+                if rtsp_active_session["decision"] == "allowed" and not rtsp_active_session["has_triggered"]:
                     logger.info(f"📹 RTSP: Immediate trigger fired for '{rtsp_active_session['best_plate']}'")
                     ha_ok = trigger_ha(rtsp_active_session["best_plate"])
                     mq_ok = trigger_mqtt(rtsp_active_session["best_plate"])
-                    rtsp_active_session["has_triggered"] = ha_ok or mq_ok
-                    if rtsp_active_session["has_triggered"]:
-                        rtsp_active_session["trigger_timestamp"] = datetime.now()
+                    # Discovery-Entities mit vollem Payload befüllen
+                    mqtt_publish_detection(
+                        plate=rtsp_active_session["best_plate"],
+                        decision="allowed",
+                        confidence=rtsp_active_session["best_conf"],
+                        matched_plate=rtsp_active_session.get("matched_plate", ""),
+                    )
+                    rtsp_active_session["has_triggered"] = ha_ok or mq_ok or True
+                    rtsp_active_session["trigger_timestamp"] = datetime.now()
                         
                 # Encode full frame nur wenn Session-Bild gespeichert wird (lazy)
                 if orig_frame_bytes is None:
