@@ -710,8 +710,6 @@ rtsp_status = {
     "_detect_hits": 0,
     "_ocr_calls": 0,
     "_ocr_hits": 0,
-    "_fallback_calls": 0,
-    "_fallback_hits": 0,
 }
 
 # Used to group identical vehicles into a single event instead of repeating DB writes
@@ -1102,26 +1100,6 @@ def rtsp_processor_thread():
             engine_bytes = eng_buf.tobytes()
             _t_enc = time.time() - _t_enc_start
 
-            # Preview updates: rate-limited to max 2 FPS (saves 1-2 full-frame JPEG encodes per analysis)
-            _now_preview = time.time()
-            if _now_preview - rtsp_status.get("_last_preview_time", 0) > 0.5:
-                _t_prev_start = time.time()
-                _did_preview = True
-                rtsp_status["_last_preview_time"] = _now_preview
-                # Unmasked preview for ROI editor
-                s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                if s_umb:
-                    rtsp_unmasked_preview_frame = b_umb.tobytes()
-                # Masked preview for live view
-                if has_roi:
-                    preview = cv2.bitwise_and(frame, frame, mask=rtsp_mask_cache["mask"])
-                    s_prev, b_prev = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    if s_prev:
-                        rtsp_preview_frame = b_prev.tobytes()
-                else:
-                    rtsp_preview_frame = b_umb.tobytes() if s_umb else rtsp_preview_frame
-                _t_preview = time.time() - _t_prev_start
-            
             rtsp_status["frames_analyzed"] += 1
             rtsp_status["last_capture"] = datetime.now().isoformat()
             
@@ -1133,16 +1111,14 @@ def rtsp_processor_thread():
                 elapsed = capture_times[-1] - capture_times[0]
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
-            # === 2-PASS ARCHITECTURE with FALLBACK ===
-            # Pass 1: /detect on 640px (YOLO only, ~100-200ms)
-            # Pass 2: /ocr on hi-res crop from original (~50-100ms)
-            # Fallback: /analyze single-pass if 2-pass returns nothing
+            # === 2-PASS PIPELINE ===
+            # Pass 1: /detect (YOLO 256, ~185ms) — jeden Frame
+            # Pass 2: /ocr auf Hi-Res Crop (~200ms) — nur bei Detection
             analysis_start = time.time()
 
             plate = ""
             confidence = 0.0
             result = {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
-            used_fallback = False
 
             # --- Pass 1: Detection ---
             detect_result = _detect_plates(engine_bytes, f"rtsp_{cam_name}.jpg")
@@ -1205,48 +1181,8 @@ def rtsp_processor_thread():
                             "bbox": [ox1, oy1, ox2, oy2],
                         }
 
-            # --- FALLBACK: Nur wenn YOLO etwas gefunden hat, aber OCR nichts lesen konnte ---
-            # Kein Fallback bei komplett leerer Detection — kein Kennzeichen im Bild
-            if detections and (not plate or plate == "UNKNOWN"):
-                fallback_result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
-                f_plate = fallback_result.get("plate", "")
-                f_conf = fallback_result.get("confidence", 0.0)
-                if f_plate and f_plate != "UNKNOWN" and f_conf > 0.3:
-                    plate = f_plate
-                    confidence = f_conf
-                    used_fallback = True
-                    rtsp_status["_fallback_hits"] = rtsp_status.get("_fallback_hits", 0) + 1
-
-                    # Extract hi-res crop from original frame using fallback bbox
-                    f_bbox = fallback_result.get("bbox")
-                    crop_jpeg = fallback_result.get("crop_jpeg")
-                    if f_bbox and len(f_bbox) == 4:
-                        fx1, fy1, fx2, fy2 = f_bbox
-                        if ew > YOLO_MAX_WIDTH:
-                            f_inv = 1.0 / scale
-                        else:
-                            f_inv = 1.0
-                        frx1, fry1 = int(fx1 * f_inv), int(fy1 * f_inv)
-                        frx2, fry2 = int(fx2 * f_inv), int(fy2 * f_inv)
-                        if has_roi:
-                            frx1 += x_rect; fry1 += y_rect; frx2 += x_rect; fry2 += y_rect
-                        fh, fw = frame.shape[:2]
-                        frx1, fry1 = max(0, frx1), max(0, fry1)
-                        frx2, fry2 = min(fw, frx2), min(fh, fry2)
-                        if frx2 > frx1 and fry2 > fry1:
-                            fb_crop = frame[fry1:fry2, frx1:frx2]
-                            _, fb_buf = cv2.imencode('.jpg', fb_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                            crop_jpeg = fb_buf.tobytes()
-
-                    result = {
-                        "plate": plate,
-                        "confidence": confidence,
-                        "processing_time_ms": fallback_result.get("processing_time_ms"),
-                        "source": "fast_alpr",
-                        "crop_jpeg": crop_jpeg,
-                        "bbox": fallback_result.get("bbox"),
-                    }
-                rtsp_status["_fallback_calls"] = rtsp_status.get("_fallback_calls", 0) + 1
+            # Kein Fallback bei RTSP — nächster Frame kommt in 1s, Fallback kostet ~600ms extra.
+            # False Positives (YOLO sieht was, OCR kann nichts lesen) werden einfach übersprungen.
 
             analysis_duration = time.time() - analysis_start
             _t_engine = analysis_duration
@@ -1263,12 +1199,9 @@ def rtsp_processor_thread():
             # Store in debug buffer (showing exactly what the engine saw)
             _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=engine_ms)
 
-            # Encode full original frame (not downscaled) for session storage
-            _, orig_frame_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            orig_frame_bytes = orig_frame_buf.tobytes()
-
             # --- Intelligent Event Grouping Logic Starts Here ---
             is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
+            orig_frame_bytes = None
             now_str = time.time()
 
             # Handle detection
@@ -1311,7 +1244,10 @@ def rtsp_processor_thread():
                     if rtsp_active_session["has_triggered"]:
                         rtsp_active_session["trigger_timestamp"] = datetime.now()
                         
-                # Add current frame to session gallery (original resolution)
+                # Encode full frame nur wenn Session-Bild gespeichert wird (lazy)
+                if orig_frame_bytes is None:
+                    _, orig_frame_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    orig_frame_bytes = orig_frame_buf.tobytes()
                 rtsp_active_session["images"].append({
                     "jpeg_bytes": orig_frame_bytes,
                     "plate": plate,
@@ -1331,7 +1267,10 @@ def rtsp_processor_thread():
                 
                 # If we are in an active session, add empty frames up to a limit (so gallery shows the car leaving)
                 if rtsp_active_session["is_active"] and len(rtsp_active_session["images"]) < 10:
-                     rtsp_active_session["images"].append({
+                    if orig_frame_bytes is None:
+                        _, orig_frame_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        orig_frame_bytes = orig_frame_buf.tobytes()
+                    rtsp_active_session["images"].append({
                         "jpeg_bytes": orig_frame_bytes,
                         "plate": "UNKNOWN",
                         "confidence": 0.0,
@@ -1452,8 +1391,22 @@ def rtsp_processor_thread():
                 ]
                 logger.warning(f"📹 {' | '.join(parts)}")
             else:
-                # Normal performance trace at DEBUG level (won't flood logs)
                 logger.debug(f"📹 cycle {_total_ms}ms | engine={_eng_ms} | plate={plate or '-'}")
+
+            # Preview updates NACH der Analysis (nicht im kritischen Pfad)
+            _now_preview = time.time()
+            if _now_preview - rtsp_status.get("_last_preview_time", 0) > 0.5:
+                rtsp_status["_last_preview_time"] = _now_preview
+                s_umb, b_umb = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if s_umb:
+                    rtsp_unmasked_preview_frame = b_umb.tobytes()
+                if has_roi:
+                    preview = cv2.bitwise_and(frame, frame, mask=rtsp_mask_cache["mask"])
+                    s_prev, b_prev = cv2.imencode('.jpg', preview, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if s_prev:
+                        rtsp_preview_frame = b_prev.tobytes()
+                else:
+                    rtsp_preview_frame = b_umb.tobytes() if s_umb else rtsp_preview_frame
 
         except Exception as e:
             logger.error(f"📹 RTSP Processor Error: {e}")
