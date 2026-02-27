@@ -676,7 +676,7 @@
                             <!-- Preview Image (refreshes every poll tick) -->
                             <div x-show="status.state === 'connected' || status.state === 'connecting'"
                                 style="margin-bottom: 0.75rem;">
-                                <img :src="($parent && $parent.tab === 'rtsp') ? '/api/rtsp/preview?t=' + pollTick : 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='" id="rtsp-preview-img"
+                                <img :src="'/api/rtsp/preview?t=' + pollTick" id="rtsp-preview-img"
                                     style="width:100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); max-height: 220px; object-fit: cover;"
                                     alt="RTSP Vorschau" onerror="this.style.display='none'"
                                     onload="this.style.display='block'">
@@ -1318,7 +1318,6 @@
                 },
 
                 async fetchStatus() {
-                    if (this.$parent && this.$parent.tab !== 'rtsp') return;
                     try {
                         const res = await fetch('/api/rtsp/status');
                         if (res.ok) this.status = await res.json();
