@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
@@ -345,3 +345,261 @@ def get_debug_stats():
         "max_age_seconds": DEBUG_BUFFER_MAX_AGE_SECONDS,
     }
 
+
+# --- Debug Pipeline: Step-by-step RTSP simulation ---
+
+@router.post("/api/debug/pipeline")
+async def debug_pipeline(file: UploadFile = File(...)):
+    """Simulate the full RTSP 2-pass pipeline on an uploaded image.
+    Returns step-by-step results with intermediate images (base64), timings, and metadata.
+    This exactly replicates what happens to each RTSP frame."""
+    import cv2
+    import numpy as np
+    import base64
+    import time
+    import json
+    import requests
+    from watcher import (
+        _get_cached_polygon, get_setting, apply_corrections,
+        ENGINE_URL, _detect_plates, _ocr_plate, _analyze_frame_bytes,
+    )
+    from database import SessionLocal
+
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Ungültiges Bild")
+
+    steps = []
+    total_start = time.time()
+
+    # --- Step 1: Original Image ---
+    t0 = time.time()
+    orig_h, orig_w = frame.shape[:2]
+    _, orig_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    orig_b64 = base64.b64encode(orig_buf.tobytes()).decode('ascii')
+    steps.append({
+        "step": 1,
+        "name": "Original-Bild",
+        "description": f"Eingelesenes Bild: {orig_w}x{orig_h}px ({len(contents)/1024:.0f} KB)",
+        "image_b64": orig_b64,
+        "duration_ms": round((time.time() - t0) * 1000, 1),
+        "details": {"width": orig_w, "height": orig_h, "size_kb": round(len(contents)/1024, 1)},
+    })
+
+    # --- Step 2: ROI Masking ---
+    t0 = time.time()
+    db = SessionLocal()
+    polygon_str = get_setting(db, "rtsp_roi_polygon", "")
+    db.close()
+
+    has_roi = False
+    x_rect, y_rect, w_rect, h_rect = 0, 0, orig_w, orig_h
+    frame_for_engine = frame
+
+    if polygon_str:
+        try:
+            points = json.loads(polygon_str)
+            if len(points) >= 3:
+                h, w = frame.shape[:2]
+                poly_pts = np.array([
+                    [int(p["x"] * w), int(p["y"] * h)] for p in points
+                ], np.int32).reshape((-1, 1, 2))
+
+                mask = np.zeros((h, w), dtype=np.uint8)
+                cv2.fillPoly(mask, [poly_pts], 255)
+
+                x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
+                x_rect = max(0, x_rect)
+                y_rect = max(0, y_rect)
+                w_rect = min(w - x_rect, w_rect)
+                h_rect = min(h - y_rect, h_rect)
+
+                cropped_mask = mask[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+                frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect].copy()
+                frame_for_engine = cv2.bitwise_and(frame_for_engine, frame_for_engine, mask=cropped_mask)
+                has_roi = True
+
+                _, mask_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                mask_b64 = base64.b64encode(mask_buf.tobytes()).decode('ascii')
+                mh, mw = frame_for_engine.shape[:2]
+                steps.append({
+                    "step": 2,
+                    "name": "ROI-Maskierung",
+                    "description": f"ROI angewendet ({len(points)} Punkte) → Crop: {mw}x{mh}px (Offset: {x_rect},{y_rect})",
+                    "image_b64": mask_b64,
+                    "duration_ms": round((time.time() - t0) * 1000, 1),
+                    "details": {"roi_points": len(points), "crop_w": mw, "crop_h": mh, "offset_x": x_rect, "offset_y": y_rect},
+                })
+        except Exception as e:
+            steps.append({
+                "step": 2, "name": "ROI-Maskierung",
+                "description": f"ROI-Fehler: {e}", "image_b64": None,
+                "duration_ms": round((time.time() - t0) * 1000, 1), "details": {"error": str(e)},
+            })
+    else:
+        steps.append({
+            "step": 2, "name": "ROI-Maskierung",
+            "description": "Kein ROI konfiguriert — volles Bild wird verwendet",
+            "image_b64": None, "duration_ms": round((time.time() - t0) * 1000, 1),
+            "details": {"roi_active": False},
+        })
+
+    # --- Step 3: Resize to 640px ---
+    t0 = time.time()
+    eh, ew = frame_for_engine.shape[:2]
+    YOLO_MAX_WIDTH = 640
+    resize_scale = 1.0
+    if ew > YOLO_MAX_WIDTH:
+        resize_scale = YOLO_MAX_WIDTH / ew
+        new_w = YOLO_MAX_WIDTH
+        new_h = int(eh * resize_scale)
+        frame_for_engine = cv2.resize(frame_for_engine, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    else:
+        new_w, new_h = ew, eh
+
+    _, resize_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    resize_b64 = base64.b64encode(resize_buf.tobytes()).decode('ascii')
+    engine_bytes = resize_buf.tobytes()
+
+    steps.append({
+        "step": 3, "name": "Resize fuer YOLO",
+        "description": f"{ew}x{eh} → {new_w}x{new_h}px (Faktor: {resize_scale:.3f})",
+        "image_b64": resize_b64,
+        "duration_ms": round((time.time() - t0) * 1000, 1),
+        "details": {"original_w": ew, "original_h": eh, "resized_w": new_w, "resized_h": new_h, "scale": round(resize_scale, 4)},
+    })
+
+    # --- Step 4: /detect (YOLO Detection) ---
+    t0 = time.time()
+    detect_result = _detect_plates(engine_bytes, "debug_pipeline.jpg")
+    detect_ms = detect_result.get("processing_time_ms")
+    detections = detect_result.get("detections", [])
+    detect_mode = detect_result.get("mode", "unknown")
+
+    # Draw bboxes on the 640px image for visualization
+    det_vis = frame_for_engine.copy()
+    for det in detections:
+        bbox = det.get("bbox", [])
+        if len(bbox) == 4:
+            cv2.rectangle(det_vis, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+            cv2.putText(det_vis, f"{det.get('confidence', 0):.2f}", (bbox[0], bbox[1]-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    _, det_buf = cv2.imencode('.jpg', det_vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    det_b64 = base64.b64encode(det_buf.tobytes()).decode('ascii')
+
+    steps.append({
+        "step": 4, "name": "/detect (YOLO)",
+        "description": f"{len(detections)} Kennzeichen gefunden (Engine: {detect_ms:.0f}ms, Modus: {detect_mode})" if detections else f"Keine Kennzeichen gefunden ({detect_ms or 0:.0f}ms, Modus: {detect_mode})",
+        "image_b64": det_b64,
+        "duration_ms": round((time.time() - t0) * 1000, 1),
+        "details": {"detections": detections, "engine_ms": detect_ms, "mode": detect_mode},
+    })
+
+    # --- Step 5: BBox-Mapping + Hi-Res Crop ---
+    plate = ""
+    confidence = 0.0
+    crop_b64 = None
+
+    if detections:
+        t0 = time.time()
+        best_det = max(detections, key=lambda d: d.get("confidence", 0))
+        engine_bbox = best_det.get("bbox", [])
+
+        if len(engine_bbox) == 4:
+            ex1, ey1, ex2, ey2 = engine_bbox
+            inv_scale = 1.0 / resize_scale if resize_scale != 1.0 else 1.0
+            rx1 = int(ex1 * inv_scale)
+            ry1 = int(ey1 * inv_scale)
+            rx2 = int(ex2 * inv_scale)
+            ry2 = int(ey2 * inv_scale)
+            if has_roi:
+                ox1 = rx1 + x_rect
+                oy1 = ry1 + y_rect
+                ox2 = rx2 + x_rect
+                oy2 = ry2 + y_rect
+            else:
+                ox1, oy1, ox2, oy2 = rx1, ry1, rx2, ry2
+            fh, fw = frame.shape[:2]
+            ox1, oy1 = max(0, ox1), max(0, oy1)
+            ox2, oy2 = min(fw, ox2), min(fh, oy2)
+
+            # Draw on original image
+            orig_with_bbox = frame.copy()
+            cv2.rectangle(orig_with_bbox, (ox1, oy1), (ox2, oy2), (0, 255, 0), 3)
+            cv2.putText(orig_with_bbox, f"Crop: {ox2-ox1}x{oy2-oy1}px", (ox1, oy1-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            _, bbox_vis_buf = cv2.imencode('.jpg', orig_with_bbox, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            bbox_vis_b64 = base64.b64encode(bbox_vis_buf.tobytes()).decode('ascii')
+
+            hires_crop = frame[oy1:oy2, ox1:ox2]
+            crop_h, crop_w = hires_crop.shape[:2] if hires_crop.size > 0 else (0, 0)
+
+            if hires_crop.size > 0:
+                _, crop_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                crop_b64 = base64.b64encode(crop_buf.tobytes()).decode('ascii')
+                crop_jpeg_bytes = crop_buf.tobytes()
+
+            steps.append({
+                "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
+                "description": f"Engine-BBox {engine_bbox} → Original [{ox1},{oy1},{ox2},{oy2}] → Crop: {crop_w}x{crop_h}px",
+                "image_b64": bbox_vis_b64,
+                "duration_ms": round((time.time() - t0) * 1000, 1),
+                "details": {
+                    "engine_bbox": engine_bbox, "inv_scale": round(inv_scale, 4),
+                    "roi_offset": [x_rect, y_rect] if has_roi else [0, 0],
+                    "original_bbox": [ox1, oy1, ox2, oy2], "crop_size": [crop_w, crop_h],
+                },
+            })
+
+            # --- Step 6: /ocr on Hi-Res Crop ---
+            if crop_b64 and hires_crop.size > 0:
+                t0 = time.time()
+                ocr_result = _ocr_plate(crop_jpeg_bytes, "debug_crop.jpg")
+                plate = ocr_result.get("plate", "")
+                confidence = ocr_result.get("confidence", 0.0)
+                ocr_ms = ocr_result.get("processing_time_ms")
+                ocr_mode = ocr_result.get("mode", "unknown")
+
+                steps.append({
+                    "step": 6, "name": "/ocr (Hi-Res Crop)",
+                    "description": f"Erkannt: '{plate}' (Conf: {confidence:.2f}, {ocr_ms:.0f}ms, Modus: {ocr_mode})" if plate and plate != "UNKNOWN" else f"Nicht erkannt ({ocr_ms or 0:.0f}ms, Modus: {ocr_mode})",
+                    "image_b64": crop_b64,
+                    "duration_ms": round((time.time() - t0) * 1000, 1),
+                    "details": {"plate": plate, "confidence": confidence, "engine_ms": ocr_ms, "mode": ocr_mode},
+                })
+    else:
+        steps.append({
+            "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
+            "description": "Uebersprungen — keine Detection", "image_b64": None,
+            "duration_ms": 0, "details": {},
+        })
+
+    # --- Step 7 (optional): Fallback /analyze ---
+    if not plate or plate == "UNKNOWN":
+        t0 = time.time()
+        fallback_result = _analyze_frame_bytes(engine_bytes, "debug_fallback.jpg")
+        f_plate = fallback_result.get("plate", "")
+        f_conf = fallback_result.get("confidence", 0.0)
+        f_ms = fallback_result.get("processing_time_ms")
+        steps.append({
+            "step": 7, "name": "Fallback: /analyze (Single-Pass)",
+            "description": f"Erkannt: '{f_plate}' (Conf: {f_conf:.2f}, {f_ms:.0f}ms)" if f_plate and f_plate != "UNKNOWN" else f"Auch nichts erkannt ({f_ms or 0:.0f}ms)",
+            "image_b64": None,
+            "duration_ms": round((time.time() - t0) * 1000, 1),
+            "details": {"plate": f_plate, "confidence": f_conf, "engine_ms": f_ms},
+        })
+        if f_plate and f_plate != "UNKNOWN" and f_conf > 0:
+            plate = f_plate
+            confidence = f_conf
+
+    total_ms = round((time.time() - total_start) * 1000, 1)
+
+    return {
+        "steps": steps,
+        "total_duration_ms": total_ms,
+        "final_plate": plate,
+        "final_confidence": confidence,
+        "step_count": len(steps),
+    }
