@@ -432,39 +432,6 @@ def process_first_image(folder_path: str, img_path: str):
     matched_plate, match_score, decision = fuzzy_match_plate(plate)
     match_score_val = match_score if match_score is not None else 0.0
 
-    # Hybrid cascade: PaddleOCR fallback when fuzzy-match is poor (not just OCR confidence)
-    # Send only the plate CROP to PaddleOCR for better accuracy (not the full image)
-    if rec_mode == "hybrid" and match_score_val < 0.80 and plate:
-        logger.info(f"Hybrid Stage 2 (PaddleOCR) for first image — match_score {match_score_val:.2f} < 0.80")
-        try:
-            # Prefer plate crop from YOLO detection; fall back to full image
-            crop_bytes = result.get("crop_jpeg")
-            if crop_bytes:
-                logger.info("PaddleOCR: Using YOLO plate crop (not full image)")
-                paddle_input = crop_bytes
-            else:
-                logger.info("PaddleOCR: No crop available, using full image")
-                with open(img_path, 'rb') as f:
-                    paddle_input = f.read()
-            paddle_result = analyze_with_paddleocr(paddle_input)
-            p_plate = paddle_result.get("plate", "")
-            if p_plate:
-                p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
-                p_score_val = p_score if p_score is not None else 0.0
-                logger.info(f"PaddleOCR: '{p_plate}' (match={p_score_val:.2f}) vs fast_alpr: '{plate}' (match={match_score_val:.2f})")
-                if p_score_val > match_score_val:
-                    logger.info(f"PaddleOCR wins! '{plate}' -> '{p_plate}'")
-                    # Keep the crop from fast_alpr (high quality)
-                    crop_jpeg_backup = result.get("crop_jpeg")
-                    result = paddle_result
-                    result["crop_jpeg"] = crop_jpeg_backup
-                    plate = result.get("plate", "")
-                    conf = result.get("confidence", 0.0)
-                    proc_time = result.get("processing_time_ms")
-                    matched_plate, match_score, decision = p_matched, p_score, p_decision
-        except Exception as e:
-            logger.error(f"PaddleOCR fallback error: {e}")
-    
     # Trigger integrations if allowed
     db = SessionLocal()
     ha_enabled = get_setting(db, "ha_enabled", "true").lower() == "true"
@@ -601,44 +568,6 @@ def process_followup_images(folder_path: str):
     # Fuzzy match the best fast_alpr result
     matched_plate_batch, match_score_batch, decision_batch = fuzzy_match_plate(best_plate)
     match_score_batch_val = match_score_batch if match_score_batch is not None else 0.0
-
-    # Hybrid cascade: PaddleOCR fallback when fuzzy-match is poor
-    # Send only the plate CROP to PaddleOCR for better accuracy
-    if rec_mode == "hybrid" and match_score_batch_val < 0.80 and best_plate:
-        logger.info(f"Hybrid Stage 2 (PaddleOCR) for follow-up batch — match_score {match_score_batch_val:.2f} < 0.80")
-        try:
-            # Find best crop from image results (prefer YOLO crop over full image)
-            paddle_input = None
-            for img_path, res in image_results:
-                if res.get("crop_jpeg") and res.get("confidence", 0) > 0:
-                    paddle_input = res["crop_jpeg"]
-                    logger.info("PaddleOCR: Using YOLO plate crop from best detection")
-                    break
-            # Fallback: use full image file
-            if paddle_input is None:
-                best_img_path = image_results[0][0]
-                for img_path, res in image_results:
-                    if res.get("confidence", 0) > 0:
-                        best_img_path = img_path
-                        break
-                if os.path.exists(best_img_path):
-                    with open(best_img_path, 'rb') as f:
-                        paddle_input = f.read()
-                    logger.info("PaddleOCR: No crop available, using full image")
-            if paddle_input:
-                paddle_result = analyze_with_paddleocr(paddle_input)
-                p_plate = paddle_result.get("plate", "")
-                if p_plate:
-                    p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
-                    p_score_val = p_score if p_score is not None else 0.0
-                    logger.info(f"PaddleOCR: '{p_plate}' (match={p_score_val:.2f}) vs fast_alpr: '{best_plate}' (match={match_score_batch_val:.2f})")
-                    if p_score_val > match_score_batch_val:
-                        best_plate = paddle_result["plate"]
-                        best_conf = paddle_result["confidence"]
-                        matched_plate_batch, match_score_batch, decision_batch = p_matched, p_score, p_decision
-                        logger.info(f"PaddleOCR wins follow-up: '{best_plate}' (match={p_score_val:.2f})")
-        except Exception as e:
-            logger.error(f"PaddleOCR fallback error: {e}")
 
     # Re-check fuzzy match with the improved plate
     matched_plate, match_score, decision = fuzzy_match_plate(best_plate)
@@ -974,132 +903,6 @@ def _ocr_plate(jpeg_bytes: bytes, filename: str = "crop.jpg") -> dict:
     except Exception as e:
         logger.error(f"Engine /ocr request failed: {e}")
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
-
-
-# --- PaddleOCR Backup Integration ---
-
-_paddle_ocr_instance = None
-_paddle_ocr_lock = threading.Lock()
-
-def _get_paddle_ocr():
-    """Lazy-initialize PaddleOCR (only loaded once, ~30 MB model download on first use)."""
-    global _paddle_ocr_instance
-    if _paddle_ocr_instance is None:
-        with _paddle_ocr_lock:
-            if _paddle_ocr_instance is None:
-                try:
-                    import os as _os
-                    # oneDNN/MKL deaktivieren — inkompatibel mit manchen CPUs (ConvertPirAttribute Fehler)
-                    _os.environ['FLAGS_use_mkldnn'] = '0'
-                    _os.environ['FLAGS_use_mkldnn_weight_cache'] = '0'
-                    from paddleocr import PaddleOCR
-                    try:
-                        # PP-OCRv5+ API (PaddlePaddle >= 3.x)
-                        _paddle_ocr_instance = PaddleOCR(lang='en')
-                        _paddle_ocr_instance._api_v5 = True
-                    except Exception:
-                        # Legacy API fallback
-                        _paddle_ocr_instance = PaddleOCR(use_angle_cls=True, lang='en')
-                        _paddle_ocr_instance._api_v5 = False
-                    logger.info("PaddleOCR initialized successfully.")
-                except Exception as e:
-                    logger.error(f"Failed to initialize PaddleOCR: {e}")
-    return _paddle_ocr_instance
-
-
-def analyze_with_paddleocr(jpeg_bytes: bytes) -> dict:
-    """Run PaddleOCR on a single JPEG image as backup OCR.
-
-    Returns:
-        {"plate": str, "confidence": float, "processing_time_ms": float, "source": "paddleocr"}
-    """
-    import numpy as np
-    import cv2
-
-    ocr = _get_paddle_ocr()
-    if ocr is None:
-        return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
-
-    start_time = time.time()
-    try:
-        # Decode JPEG to numpy array
-        img_array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        if img is None:
-            return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
-
-        api_v5 = getattr(ocr, '_api_v5', False)
-        results_flat = []
-        if api_v5:
-            raw = ocr.predict(img)
-            # PP-OCRv5 / PaddleX: predict() gibt Generator/Liste von OCRResult-Objekten zurück
-            # OCRResult hat: rec_texts (list[str]), rec_scores (list[float])
-            # Alternativ: dict mit 'rec_text'/'rec_score' oder list-of-list
-            if raw is not None:
-                for item in raw:
-                    # OCRResult-Objekt (PaddleX API)
-                    if hasattr(item, 'rec_texts') and hasattr(item, 'rec_scores'):
-                        for t, c in zip(item.rec_texts, item.rec_scores):
-                            results_flat.append((str(t), float(c)))
-                    # Dict-Format
-                    elif isinstance(item, dict):
-                        t = item.get('rec_text', item.get('text', ''))
-                        c = float(item.get('rec_score', item.get('confidence', 0.0)))
-                        if t:
-                            results_flat.append((t, c))
-                    # List-Format [[box, [text, conf]], ...]
-                    elif isinstance(item, list):
-                        for subitem in item:
-                            if isinstance(subitem, list) and len(subitem) >= 2 and isinstance(subitem[1], (list, tuple)):
-                                results_flat.append((str(subitem[1][0]), float(subitem[1][1])))
-                            elif isinstance(subitem, dict):
-                                t = subitem.get('rec_text', subitem.get('text', ''))
-                                c = float(subitem.get('rec_score', subitem.get('confidence', 0.0)))
-                                if t:
-                                    results_flat.append((t, c))
-            logger.info(f"PaddleOCR v5 raw type={type(list(raw) if hasattr(raw,'__iter__') else raw).__name__}, results_flat={results_flat}")
-        else:
-            raw = ocr.ocr(img, cls=True)
-            if raw and raw[0]:
-                for line in raw[0]:
-                    results_flat.append((line[1][0], float(line[1][1])))
-
-        processing_time_ms = (time.time() - start_time) * 1000.0
-
-        if not results_flat:
-            logger.info(f"PaddleOCR: no text detected ({processing_time_ms:.0f}ms)")
-            return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
-
-        # Find the best plate-like text among all detected text regions
-        best_plate = ""
-        best_conf = 0.0
-        for text, conf in results_flat:
-            text = text.strip().upper()
-            # Clean: keep only alphanumeric
-            cleaned = re.sub(r'[^A-ZÄÖÜ0-9]', '', text)
-            # Plate-like: 4-12 chars, has both letters and digits
-            if 4 <= len(cleaned) <= 12 and re.search(r'[A-Z]', cleaned) and re.search(r'\d', cleaned):
-                if conf > best_conf:
-                    best_plate = cleaned
-                    best_conf = conf
-
-        if best_plate:
-            best_plate = apply_corrections(best_plate)
-            logger.info(f"PaddleOCR: plate='{best_plate}' conf={best_conf:.2f} ({processing_time_ms:.0f}ms)")
-            return {
-                "plate": best_plate,
-                "confidence": best_conf,
-                "processing_time_ms": processing_time_ms,
-                "source": "paddleocr",
-            }
-        else:
-            logger.info(f"PaddleOCR: no plate-like text found ({processing_time_ms:.0f}ms)")
-            return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
-
-    except Exception as e:
-        processing_time_ms = (time.time() - start_time) * 1000.0
-        logger.error(f"PaddleOCR error: {e}")
-        return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
 
 
 # --- Recognition Settings (cached) ---
@@ -1638,47 +1441,6 @@ def rtsp_processor_thread():
                 s_dec = rtsp_active_session["decision"]
                 s_imgs = rtsp_active_session["images"]
 
-                # --- HYBRID CASCADE: PaddleOCR fallback ---
-                # Smart trigger: use fuzzy-match score, not OCR confidence.
-                # If fast_alpr can't match a known plate (score < 0.80), PaddleOCR gets a chance.
-                s_match_before = rtsp_active_session.get("best_match_score", 0.0)
-                needs_paddle = rec_mode == "hybrid" and s_match_before < 0.80
-                logger.info(f"📹 RTSP: Finalize — mode={rec_mode}, plate='{s_plate}', conf={s_conf:.2f}, match={s_match_before:.2f}, paddle={'YES' if needs_paddle else 'skip'}")
-
-                if needs_paddle:
-                    plate_frames = [img for img in s_imgs if img.get("has_plate")]
-                    # Sort by confidence desc — try best frame first
-                    plate_frames.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-                    # Prefer plate crop from YOLO detection for PaddleOCR
-                    best_crop = None
-                    for pf in plate_frames:
-                        if pf.get("crop_jpeg"):
-                            best_crop = pf["crop_jpeg"]
-                            break
-                    if best_crop:
-                        paddle_input = best_crop
-                        logger.info(f"📹 RTSP: PaddleOCR using YOLO plate crop (not full frame)")
-                    else:
-                        paddle_input = plate_frames[0]["jpeg_bytes"] if plate_frames else (s_imgs[0]["jpeg_bytes"] if s_imgs else None)
-                        logger.info(f"📹 RTSP: PaddleOCR using full frame (no crop available)")
-
-                    if paddle_input:
-                        logger.info(f"📹 RTSP: Hybrid Stage 2 (PaddleOCR) — fast_alpr match only {s_match_before:.2f}")
-                        paddle_result = analyze_with_paddleocr(paddle_input)
-                        p_plate = paddle_result.get("plate", "")
-                        p_conf = paddle_result.get("confidence", 0.0)
-
-                        if p_plate:
-                            # Check if PaddleOCR result fuzzy-matches better
-                            p_matched, p_score, p_decision = fuzzy_match_plate(p_plate)
-                            p_score_val = p_score if p_score is not None else 0.0
-                            logger.info(f"📹 RTSP: PaddleOCR result: '{p_plate}' (conf={p_conf:.2f}, match={p_score_val:.2f}) vs fast_alpr: '{s_plate}' (match={s_match_before:.2f})")
-
-                            if p_score_val > s_match_before:
-                                logger.info(f"📹 RTSP: PaddleOCR wins! '{s_plate}' -> '{p_plate}' (match {s_match_before:.2f} -> {p_score_val:.2f})")
-                                s_plate = apply_corrections(p_plate)
-                                s_conf = p_conf
-
                 # Re-do match just to be safe it's correct for the final selected plate
                 s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)
 
@@ -1974,9 +1736,6 @@ def _startup_system_check():
         db.close()
 
     logger.info(f"  Recognition Mode: {rec_mode.upper()}")
-    if rec_mode == "hybrid":
-        logger.info(f"  Hybrid: fast_alpr (primary) + PaddleOCR (fallback on match < 0.80)")
-        logger.info(f"  PaddleOCR: Will initialize on first use (lazy-load)")
     logger.info(f"  Active Plates: {plate_count} | Stored Events: {event_count}")
     logger.info(f"  Integrations: HA={'ON' if ha_enabled else 'OFF'} | MQTT={'ON' if mqtt_enabled else 'OFF'}")
     logger.info(f"  Inputs: Folder Watch={'ON' if folder_watch else 'OFF'} | RTSP={'ON' if rtsp_enabled else 'OFF'}")
