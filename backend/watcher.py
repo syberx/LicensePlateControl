@@ -985,8 +985,7 @@ def _get_paddle_ocr():
                     from paddleocr import PaddleOCR
                     _paddle_ocr_instance = PaddleOCR(
                         use_angle_cls=True,
-                        lang='en',  # Plates are alphanumeric
-                        show_log=False,
+                        lang='en',
                         use_gpu=False,
                     )
                     logger.info("PaddleOCR initialized successfully.")
