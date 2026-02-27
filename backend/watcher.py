@@ -842,11 +842,10 @@ def _detect_plates(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
     return {"detections": [], "processing_time_ms": None}
 
 
-def _preprocess_crop_for_ocr(jpeg_bytes: bytes) -> bytes:
+def _preprocess_crop_for_ocr(jpeg_bytes: bytes, enhance: bool = True) -> bytes:
     """Preprocess license plate crop for better OCR accuracy.
-    - Upscale if too small (min 80px height)
-    - CLAHE contrast enhancement
-    - Light sharpening
+    - Upscale immer (min 120px Höhe) — hilft OCR immer
+    - CLAHE + Schärfen nur wenn enhance=True (bei dunklen/unscharfen Bildern)
     Returns preprocessed JPEG bytes."""
     try:
         import cv2
@@ -857,28 +856,27 @@ def _preprocess_crop_for_ocr(jpeg_bytes: bytes) -> bytes:
             return jpeg_bytes
         h, w = img.shape[:2]
 
-        # Upscale: OCR braucht mindestens 120px Höhe für zuverlässige Zeichenerkennung
-        # LANCZOS4 = schärfstes Upscaling
+        # Upscale: OCR braucht mindestens 120px Höhe — immer anwenden
         min_h = 120
         if h < min_h:
             scale = min_h / h
             img = cv2.resize(img, (int(w * scale), min_h), interpolation=cv2.INTER_LANCZOS4)
             h, w = img.shape[:2]
         elif h < 200:
-            # Bild schon okay aber nochmal 2x hochskalieren hilft OCR bei feinen Zeichen
             img = cv2.resize(img, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
             h, w = img.shape[:2]
 
-        # CLAHE Kontrast (nur Luminanz-Kanal)
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
-        l = clahe.apply(l)
-        img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+        if enhance:
+            # CLAHE Kontrast (nur Luminanz-Kanal) — nur bei dunklen/kontrastarmen Bildern nötig
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 4))
+            l = clahe.apply(l)
+            img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
 
-        # Leichtes Schärfen
-        kernel = np.array([[0, -0.4, 0], [-0.4, 2.6, -0.4], [0, -0.4, 0]])
-        img = cv2.filter2D(img, -1, kernel)
+            # Sehr leichtes Schärfen — bei klaren Bildern kann zu viel Schärfen Dünnstriche (1,I) zerstören
+            kernel = np.array([[0, -0.25, 0], [-0.25, 2.0, -0.25], [0, -0.25, 0]])
+            img = cv2.filter2D(img, -1, kernel)
 
         _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         return buf.tobytes()
