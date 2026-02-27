@@ -1415,7 +1415,9 @@ def rtsp_processor_thread():
                     if ox2 > ox1 and oy2 > oy1:
                         hires_crop = frame[oy1:oy2, ox1:ox2]
                         _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        crop_jpeg_bytes = _preprocess_crop_for_ocr(hires_buf.tobytes())
+                        # Preprocessing nur wenn Bild klein/dunkel — bei guten Kameras meist nicht nötig
+                        crop_h_px = oy2 - oy1
+                        crop_jpeg_bytes = _preprocess_crop_for_ocr(hires_buf.tobytes()) if crop_h_px < 60 else hires_buf.tobytes()
 
                         # --- Pass 2: OCR on hi-res crop ---
                         rtsp_status["_ocr_calls"] = rtsp_status.get("_ocr_calls", 0) + 1

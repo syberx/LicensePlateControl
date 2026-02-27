@@ -349,10 +349,11 @@ def get_debug_stats():
 # --- Debug Pipeline: Step-by-step RTSP simulation ---
 
 @router.post("/api/debug/pipeline")
-async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320):
+async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, preprocess: bool = True):
     """Simulate the full RTSP 2-pass pipeline on an uploaded image.
     Returns step-by-step results with intermediate images (base64), timings, and metadata.
-    detect_width: YOLO detection resolution (320/416/640). Lower = faster but less accurate."""
+    detect_width: YOLO detection resolution (320/416/640). Lower = faster but less accurate.
+    preprocess: Apply CLAHE+Schärfen auf den Crop vor OCR."""
     import cv2
     import numpy as np
     import base64
@@ -543,13 +544,18 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320):
             if hires_crop.size > 0:
                 _, crop_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 from watcher import _preprocess_crop_for_ocr
-                crop_jpeg_bytes = _preprocess_crop_for_ocr(crop_buf.tobytes())
-                # Show preprocessed crop in UI
+                raw_crop_bytes = crop_buf.tobytes()
+                if preprocess:
+                    crop_jpeg_bytes = _preprocess_crop_for_ocr(raw_crop_bytes)
+                else:
+                    crop_jpeg_bytes = raw_crop_bytes
+                # Show the crop that OCR actually receives
                 crop_b64 = base64.b64encode(crop_jpeg_bytes).decode('ascii')
 
+            prep_label = " + Preprocessing (CLAHE+Schärfen)" if preprocess else " — Preprocessing AUS (Rohbild)"
             steps.append({
                 "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
-                "description": f"Engine-BBox {engine_bbox} → Original [{ox1},{oy1},{ox2},{oy2}] → Crop: {crop_w}x{crop_h}px",
+                "description": f"Engine-BBox {engine_bbox} → Original [{ox1},{oy1},{ox2},{oy2}] → Crop: {crop_w}x{crop_h}px{prep_label}",
                 "image_b64": bbox_vis_b64,
                 "duration_ms": round((time.time() - t0) * 1000, 1),
                 "details": {

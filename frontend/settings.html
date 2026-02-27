@@ -848,6 +848,10 @@
                                     <option value="640">640px 🔍 genau</option>
                                 </select>
                             </div>
+                            <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: rgba(255,255,255,0.6); cursor: pointer; white-space: nowrap;">
+                                <input type="checkbox" x-model="usePreprocess" style="accent-color: #818cf8;">
+                                Preprocessing
+                            </label>
                             <button @click="runDebugPipeline()"
                                 :disabled="!debugPipelineFile || debugPipelineRunning"
                                 style="padding: 0.4rem 1rem; background: #fbbf24; color: #000; border: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;"
@@ -855,7 +859,7 @@
                                 <span x-text="debugPipelineRunning ? 'Analysiere...' : 'Pipeline starten'"></span>
                             </button>
                         </div>
-                        <p style="font-size: 0.7rem; color: rgba(255,255,255,0.35);">Große Bilder werden vor dem Upload automatisch verkleinert (max. 1920×1080). Für RTSP-Geschwindigkeit: 416px empfohlen.</p>
+                        <p style="font-size: 0.7rem; color: rgba(255,255,255,0.35);">Preprocessing = CLAHE-Kontrast + Schärfen vor OCR. Bei schon scharfen/hellen Bildern besser <b>aus</b>.</p>
 
                         <!-- Results -->
                         <template x-if="debugPipelineResult">
@@ -1175,6 +1179,7 @@
                 debugPipelineResult: null,
                 copyFeedback: false,
                 detectWidth: '320',
+                usePreprocess: false,
 
                 isDetectStep(step) {
                     return step && step.name && (step.name.includes('detect') || step.name.includes('YOLO'));
@@ -1260,7 +1265,7 @@
                         const fileToSend = await this.resizeImageIfNeeded(this.debugPipelineFile);
                         const formData = new FormData();
                         formData.append('file', fileToSend);
-                        const url = '/api/debug/pipeline?detect_width=' + (this.detectWidth || 416);
+                        const url = '/api/debug/pipeline?detect_width=' + (this.detectWidth || 320) + '&preprocess=' + (this.usePreprocess ? 'true' : 'false');
                         const res = await fetch(url, { method: 'POST', body: formData });
                         if (res.ok) {
                             this.debugPipelineResult = await res.json();
