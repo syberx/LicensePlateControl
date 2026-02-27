@@ -443,8 +443,10 @@
                     @click.prevent="tab = 'recognition'">Erkennung / LLM</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'storage'}"
                     @click.prevent="tab = 'storage'">Speicher / Bereinigung</a>
+                <a href="#" class="sidebar-link" :class="{'active': tab === 'pipeline'}"
+                    @click.prevent="tab = 'pipeline'">🔬 Pipeline-Test</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'debug'}"
-                    @click.prevent="tab = 'debug'; loadDebug()">🔬 Debug Frames</a>
+                    @click.prevent="tab = 'debug'; loadDebug()">Debug Frames</a>
             </div>
 
             <div class="settings-content">
@@ -779,70 +781,6 @@
                             </div>
                         </div>
 
-                        <!-- Debug Pipeline Upload -->
-                        <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(251,191,36,0.05); border: 1px solid rgba(251,191,36,0.2); border-radius: 10px;">
-                            <h3 style="font-size: 0.9rem; color: #fbbf24; margin-bottom: 0.5rem;">Debug: Pipeline-Test</h3>
-                            <p style="font-size: 0.75rem; color: rgba(255,255,255,0.5); margin-bottom: 0.75rem;">
-                                Lade ein Testbild hoch (wie es vom RTSP kommt) und sieh Schritt fuer Schritt was passiert:
-                                Maskierung → Resize → Detection → BBox-Mapping → Hi-Res Crop → OCR
-                            </p>
-                            <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem;">
-                                <input type="file" accept="image/*" id="debug-pipeline-file"
-                                    style="font-size: 0.75rem; color: #e0e0e0; flex: 1;"
-                                    @change="debugPipelineFile = $event.target.files[0]">
-                                <button @click="runDebugPipeline()"
-                                    :disabled="!debugPipelineFile || debugPipelineRunning"
-                                    style="padding: 0.4rem 1rem; background: #fbbf24; color: #000; border: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;"
-                                    :style="(!debugPipelineFile || debugPipelineRunning) ? 'opacity: 0.4; cursor: not-allowed;' : ''">
-                                    <span x-text="debugPipelineRunning ? 'Analysiere...' : 'Pipeline starten'"></span>
-                                </button>
-                            </div>
-
-                            <!-- Results -->
-                            <template x-if="debugPipelineResult">
-                                <div>
-                                    <!-- Summary -->
-                                    <div style="padding: 0.6rem; border-radius: 8px; margin-bottom: 0.75rem;"
-                                        :style="debugPipelineResult.final_plate && debugPipelineResult.final_plate !== 'UNKNOWN' ? 'background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.3);' : 'background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3);'">
-                                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                                            <div>
-                                                <span style="font-size: 1.1rem; font-weight: 700; letter-spacing: 1.5px;"
-                                                    :style="debugPipelineResult.final_plate && debugPipelineResult.final_plate !== 'UNKNOWN' ? 'color: #34d399;' : 'color: #f87171;'"
-                                                    x-text="debugPipelineResult.final_plate || 'Nichts erkannt'"></span>
-                                                <span style="font-size: 0.7rem; color: rgba(255,255,255,0.5); margin-left: 0.5rem;"
-                                                    x-text="debugPipelineResult.final_confidence ? (debugPipelineResult.final_confidence * 100).toFixed(1) + '%' : ''"></span>
-                                            </div>
-                                            <span style="font-size: 0.75rem; color: #fbbf24; font-weight: 600;"
-                                                x-text="debugPipelineResult.total_duration_ms + ' ms total'"></span>
-                                        </div>
-                                    </div>
-
-                                    <!-- Steps -->
-                                    <template x-for="step in debugPipelineResult.steps" :key="step.step">
-                                        <div style="margin-bottom: 0.6rem; padding: 0.6rem; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
-                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
-                                                <div style="display: flex; align-items: center; gap: 0.4rem;">
-                                                    <span style="background: rgba(251,191,36,0.2); color: #fbbf24; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700;"
-                                                        x-text="'#' + step.step"></span>
-                                                    <span style="font-size: 0.8rem; color: #e0e0e0; font-weight: 600;" x-text="step.name"></span>
-                                                </div>
-                                                <span style="font-size: 0.7rem; color: rgba(255,255,255,0.4);" x-text="step.duration_ms + ' ms'"></span>
-                                            </div>
-                                            <p style="font-size: 0.72rem; color: rgba(255,255,255,0.55); margin-bottom: 0.4rem; word-break: break-all;" x-text="step.description"></p>
-                                            <img x-show="step.image_b64" :src="'data:image/jpeg;base64,' + step.image_b64"
-                                                style="max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); object-fit: contain;">
-                                            <!-- Details toggle -->
-                                            <details style="margin-top: 0.3rem;">
-                                                <summary style="font-size: 0.65rem; color: rgba(255,255,255,0.3); cursor: pointer;">Details (JSON)</summary>
-                                                <pre style="font-size: 0.6rem; color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 4px; margin-top: 0.2rem; overflow-x: auto; max-height: 120px;"
-                                                    x-text="JSON.stringify(step.details, null, 2)"></pre>
-                                            </details>
-                                        </div>
-                                    </template>
-                                </div>
-                            </template>
-                        </div>
-
                         <!-- ROI Setup Modal -->
                         <div x-show="roiModalOpen" x-cloak @keydown.window="handleROIKeydown"
                             style="position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.9); z-index: 1000; display: flex; flex-direction: column;">
@@ -889,6 +827,69 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Pipeline-Test Tab (eigener Bereich) -->
+                <div x-show="tab === 'pipeline'" x-cloak x-data="pipelinePanel()">
+                    <div class="settings-card">
+                        <h3>🔬 Pipeline-Test (Erkennungsablauf)</h3>
+                        <p class="desc">Lade ein Testbild hoch (wie es vom RTSP oder der Kamera kommt) und sieh Schritt für Schritt, was passiert: Maskierung → Resize → Detection → BBox-Mapping → Hi-Res Crop → OCR.</p>
+                        <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                            <input type="file" accept="image/*" id="debug-pipeline-file"
+                                style="font-size: 0.75rem; color: #e0e0e0; flex: 1; min-width: 180px;"
+                                @change="debugPipelineFile = $event.target.files[0]">
+                            <button @click="runDebugPipeline()"
+                                :disabled="!debugPipelineFile || debugPipelineRunning"
+                                style="padding: 0.4rem 1rem; background: #fbbf24; color: #000; border: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;"
+                                :style="(!debugPipelineFile || debugPipelineRunning) ? 'opacity: 0.4; cursor: not-allowed;' : ''">
+                                <span x-text="debugPipelineRunning ? 'Analysiere...' : 'Pipeline starten'"></span>
+                            </button>
+                        </div>
+                        <p style="font-size: 0.7rem; color: rgba(255,255,255,0.4);">Große Bilder werden vor dem Upload automatisch verkleinert (max. 1920×1080), um 413-Fehler zu vermeiden.</p>
+
+                        <!-- Results -->
+                        <template x-if="debugPipelineResult">
+                            <div style="margin-top: 1rem;">
+                                <!-- Summary -->
+                                <div style="padding: 0.6rem; border-radius: 8px; margin-bottom: 0.75rem;"
+                                    :style="debugPipelineResult.final_plate && debugPipelineResult.final_plate !== 'UNKNOWN' ? 'background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.3);' : 'background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3);'">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <div>
+                                            <span style="font-size: 1.1rem; font-weight: 700; letter-spacing: 1.5px;"
+                                                :style="debugPipelineResult.final_plate && debugPipelineResult.final_plate !== 'UNKNOWN' ? 'color: #34d399;' : 'color: #f87171;'"
+                                                x-text="debugPipelineResult.final_plate || 'Nichts erkannt'"></span>
+                                            <span style="font-size: 0.7rem; color: rgba(255,255,255,0.5); margin-left: 0.5rem;"
+                                                x-text="debugPipelineResult.final_confidence ? (debugPipelineResult.final_confidence * 100).toFixed(1) + '%' : ''"></span>
+                                        </div>
+                                        <span style="font-size: 0.75rem; color: #fbbf24; font-weight: 600;"
+                                            x-text="debugPipelineResult.total_duration_ms + ' ms total'"></span>
+                                    </div>
+                                </div>
+
+                                <!-- Steps -->
+                                <template x-for="step in debugPipelineResult.steps" :key="step.step">
+                                    <div style="margin-bottom: 0.6rem; padding: 0.6rem; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.3rem;">
+                                            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                                <span style="background: rgba(251,191,36,0.2); color: #fbbf24; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700;"
+                                                    x-text="'#' + step.step"></span>
+                                                <span style="font-size: 0.8rem; color: #e0e0e0; font-weight: 600;" x-text="step.name"></span>
+                                            </div>
+                                            <span style="font-size: 0.7rem; color: rgba(255,255,255,0.4);" x-text="step.duration_ms + ' ms'"></span>
+                                        </div>
+                                        <p style="font-size: 0.72rem; color: rgba(255,255,255,0.55); margin-bottom: 0.4rem; word-break: break-all;" x-text="step.description"></p>
+                                        <img x-show="step.image_b64" :src="'data:image/jpeg;base64,' + step.image_b64"
+                                            style="max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); object-fit: contain;">
+                                        <details style="margin-top: 0.3rem;">
+                                            <summary style="font-size: 0.65rem; color: rgba(255,255,255,0.3); cursor: pointer;">Details (JSON)</summary>
+                                            <pre style="font-size: 0.6rem; color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 4px; margin-top: 0.2rem; overflow-x: auto; max-height: 120px;"
+                                                x-text="JSON.stringify(step.details, null, 2)"></pre>
+                                        </details>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
                     </div>
                 </div>
 
@@ -1109,6 +1110,60 @@
             };
         }
 
+        function pipelinePanel() {
+            return {
+                debugPipelineFile: null,
+                debugPipelineRunning: false,
+                debugPipelineResult: null,
+
+                async resizeImageIfNeeded(file, maxW = 1920, maxH = 1080, quality = 0.85) {
+                    if (file.size < 2 * 1024 * 1024) return file; // unter 2MB: kein Resize
+                    return new Promise((resolve) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            let w = img.width, h = img.height;
+                            if (w <= maxW && h <= maxH) { resolve(file); return; }
+                            const scale = Math.min(maxW / w, maxH / h);
+                            w = Math.round(w * scale);
+                            h = Math.round(h * scale);
+                            const canvas = document.createElement('canvas');
+                            canvas.width = w;
+                            canvas.height = h;
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, w, h);
+                            canvas.toBlob((blob) => {
+                                resolve(new File([blob], file.name, { type: 'image/jpeg' }));
+                            }, 'image/jpeg', quality);
+                        };
+                        img.onerror = () => resolve(file);
+                        img.src = URL.createObjectURL(file);
+                    });
+                },
+
+                async runDebugPipeline() {
+                    if (!this.debugPipelineFile || this.debugPipelineRunning) return;
+                    this.debugPipelineRunning = true;
+                    this.debugPipelineResult = null;
+                    try {
+                        const fileToSend = await this.resizeImageIfNeeded(this.debugPipelineFile);
+                        const formData = new FormData();
+                        formData.append('file', fileToSend);
+                        const res = await fetch('/api/debug/pipeline', { method: 'POST', body: formData });
+                        if (res.ok) {
+                            this.debugPipelineResult = await res.json();
+                        } else {
+                            const err = await res.text();
+                            alert('Pipeline-Fehler: ' + (err || res.status));
+                        }
+                    } catch (e) {
+                        alert('Verbindungsfehler: ' + e.message);
+                    } finally {
+                        this.debugPipelineRunning = false;
+                    }
+                }
+            };
+        }
+
         function rtspPanel() {
             return {
                 status: {
@@ -1163,32 +1218,6 @@
                     if (!isoStr) return '';
                     const d = new Date(isoStr);
                     return d.toLocaleTimeString('de-DE');
-                },
-
-                // Debug Pipeline
-                debugPipelineFile: null,
-                debugPipelineRunning: false,
-                debugPipelineResult: null,
-
-                async runDebugPipeline() {
-                    if (!this.debugPipelineFile || this.debugPipelineRunning) return;
-                    this.debugPipelineRunning = true;
-                    this.debugPipelineResult = null;
-                    try {
-                        const formData = new FormData();
-                        formData.append('file', this.debugPipelineFile);
-                        const res = await fetch('/api/debug/pipeline', {method: 'POST', body: formData});
-                        if (res.ok) {
-                            this.debugPipelineResult = await res.json();
-                        } else {
-                            const err = await res.text();
-                            alert('Pipeline-Fehler: ' + err);
-                        }
-                    } catch (e) {
-                        alert('Verbindungsfehler: ' + e.message);
-                    } finally {
-                        this.debugPipelineRunning = false;
-                    }
                 },
 
                 // ROI Logic
