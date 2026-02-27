@@ -867,6 +867,26 @@
                                     </div>
                                 </div>
 
+                                <!-- Zeiten-Übersicht (für RTSP: Detection muss schnell sein, OCR nur bei Treffer) -->
+                                <div style="margin-bottom: 0.75rem; padding: 0.75rem; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
+                                    <div style="font-size: 0.7rem; color: rgba(255,255,255,0.5); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">⏱ Zeiten pro Schritt</div>
+                                    <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 0.25rem 1rem; font-size: 0.8rem; align-items: center;">
+                                        <template x-for="step in debugPipelineResult.steps" :key="step.step">
+                                            <div style="display: contents;">
+                                                <span :style="(step.name && step.name.includes('detect')) ? 'color: #60a5fa; font-weight: 600;' : 'color: rgba(255,255,255,0.85);'"
+                                                    x-text="step.name"></span>
+                                                <span style="color: #fbbf24; font-weight: 600; text-align: right;"
+                                                    x-text="step.duration_ms + ' ms'"></span>
+                                                <span x-show="step.name && step.name.includes('detect')"
+                                                    style="font-size: 0.65rem; color: #60a5fa; white-space: nowrap;">← RTSP-kritisch</span>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    <p style="font-size: 0.65rem; color: rgba(255,255,255,0.4); margin-top: 0.5rem; margin-bottom: 0;">
+                                        Bei 1 Bild/s RTSP: Nur Detection muss &lt;1000ms sein. OCR läuft erst wenn Kennzeichen gefunden.
+                                    </p>
+                                </div>
+
                                 <!-- Steps -->
                                 <template x-for="step in debugPipelineResult.steps" :key="step.step">
                                     <div style="margin-bottom: 0.6rem; padding: 0.6rem; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
@@ -888,6 +908,15 @@
                                         </details>
                                     </div>
                                 </template>
+
+                                <!-- Kopieren-Button -->
+                                <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                    <button @click="copyResultsToClipboard()"
+                                        style="padding: 0.5rem 1rem; background: rgba(129,140,248,0.2); color: #818cf8; border: 1px solid rgba(129,140,248,0.4); border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;">
+                                        📋 Ergebnisse kopieren
+                                    </button>
+                                    <span x-show="copyFeedback" x-transition style="margin-left: 0.5rem; font-size: 0.75rem; color: #34d399;">✓ Kopiert!</span>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -1115,6 +1144,26 @@
                 debugPipelineFile: null,
                 debugPipelineRunning: false,
                 debugPipelineResult: null,
+                copyFeedback: false,
+
+                copyResultsToClipboard() {
+                    if (!this.debugPipelineResult) return;
+                    const r = this.debugPipelineResult;
+                    let txt = '=== LicensePlateControl Pipeline-Test ===\n';
+                    txt += 'Kennzeichen: ' + (r.final_plate || 'Nichts erkannt') + '\n';
+                    txt += 'Confidence: ' + (r.final_confidence ? (r.final_confidence * 100).toFixed(1) + '%' : '—') + '\n';
+                    txt += 'Gesamt: ' + (r.total_duration_ms || 0) + ' ms\n\n';
+                    txt += '=== Zeiten pro Schritt ===\n';
+                    (r.steps || []).forEach(s => {
+                        const kritisch = (s.name || '').includes('detect') ? ' [RTSP-kritisch]' : '';
+                        txt += '#' + s.step + ' ' + (s.name || '') + ': ' + (s.duration_ms || 0) + ' ms' + kritisch + '\n';
+                    });
+                    txt += '\n(Bei 1 Bild/s RTSP: Detection muss <1000ms sein. OCR läuft erst bei Treffer.)\n';
+                    navigator.clipboard.writeText(txt).then(() => {
+                        this.copyFeedback = true;
+                        setTimeout(() => { this.copyFeedback = false; }, 2000);
+                    }).catch(() => alert('Kopieren fehlgeschlagen'));
+                },
 
                 async resizeImageIfNeeded(file, maxW = 1920, maxH = 1080, quality = 0.85) {
                     if (file.size < 2 * 1024 * 1024) return file; // unter 2MB: kein Resize
