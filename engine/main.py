@@ -71,7 +71,7 @@ def init_alpr():
         for attempt in range(max_retries):
             try:
                 alpr = ALPR(
-                    detector_model="yolo-v9-t-640-license-plate-end2end",
+                    detector_model="yolo-v9-t-256-license-plate-end2end",
                     ocr_model="cct-s-v1-global-model",
                 )
                 break
@@ -114,7 +114,7 @@ def init_alpr():
         else:
             _stats["two_pass_mode"] = "fallback"
 
-        print(f"INFO: ALPR v{VERSION} initialized - yolo-v9-t-640 + cct-s-v1 OCR (device: {_ov_device})")
+        print(f"INFO: ALPR v{VERSION} initialized - yolo-v9-t-256 + cct-s-v1 OCR (device: {_ov_device})")
         print(f"INFO: 2-pass mode: {'NATIVE' if two_pass else 'FALLBACK (using alpr.predict for both endpoints)'}")
         return True
 
@@ -254,7 +254,7 @@ def run_selftest():
 
 # Try to initialize at startup
 print(f"INFO: LicensePlateControl Engine v{VERSION} starting...")
-print(f"INFO: Detector: yolo-v9-t-640-license-plate-end2end")
+print(f"INFO: Detector: yolo-v9-t-256-license-plate-end2end")
 print(f"INFO: OCR Model: cct-s-v1-global-model")
 print(f"INFO: Device: {_ov_device}")
 init_alpr()
