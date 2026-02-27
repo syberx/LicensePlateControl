@@ -349,7 +349,7 @@ def get_debug_stats():
 # --- Debug Pipeline: Step-by-step RTSP simulation ---
 
 @router.post("/api/debug/pipeline")
-async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 416):
+async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320):
     """Simulate the full RTSP 2-pass pipeline on an uploaded image.
     Returns step-by-step results with intermediate images (base64), timings, and metadata.
     detect_width: YOLO detection resolution (320/416/640). Lower = faster but less accurate."""

@@ -1271,10 +1271,10 @@ def rtsp_processor_thread():
 
             _t_mask = time.time() - _t0
 
-            # Resize für YOLO-Detection: 416px reicht zum Finden der Position.
-            # Niedrigere Auflösung = deutlich schneller. OCR läuft auf Hi-Res-Crop.
+            # Resize für YOLO-Detection: 320px reicht zum Finden der Position.
+            # Niedrigere Auflösung = schneller (~440ms statt ~1200ms). OCR läuft auf Hi-Res-Crop.
             eh, ew = frame_for_engine.shape[:2]
-            YOLO_MAX_WIDTH = 416
+            YOLO_MAX_WIDTH = 320
             if ew > YOLO_MAX_WIDTH:
                 scale = YOLO_MAX_WIDTH / ew
                 new_w = YOLO_MAX_WIDTH

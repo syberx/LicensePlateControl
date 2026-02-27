@@ -844,7 +844,7 @@
                                 <select x-model="detectWidth"
                                     style="background: rgba(255,255,255,0.08); color: #e0e0e0; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.72rem; outline: none; cursor: pointer;">
                                     <option value="320">320px ⚡ schnell</option>
-                                    <option value="416">416px ⚖ Standard</option>
+                                    <option value="416">416px ⚖ mittel</option>
                                     <option value="640">640px 🔍 genau</option>
                                 </select>
                             </div>
@@ -1168,7 +1168,7 @@
                 debugPipelineRunning: false,
                 debugPipelineResult: null,
                 copyFeedback: false,
-                detectWidth: '416',
+                detectWidth: '320',
 
                 isDetectStep(step) {
                     return step && step.name && (step.name.includes('detect') || step.name.includes('YOLO'));
