@@ -524,9 +524,9 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
             else:
                 ox1, oy1, ox2, oy2 = rx1, ry1, rx2, ry2
             fh, fw = frame.shape[:2]
-            # Padding: 15% horizontal, 20% vertikal — damit keine Ziffer abgeschnitten wird
-            pad_x = max(6, int((ox2 - ox1) * 0.10))
-            pad_y = max(4, int((oy2 - oy1) * 0.08))
+            # Padding: rechts/links 15%, oben/unten 12% — letzten Buchstaben nicht abschneiden
+            pad_x = max(8, int((ox2 - ox1) * 0.15))
+            pad_y = max(5, int((oy2 - oy1) * 0.12))
             ox1, oy1 = max(0, ox1 - pad_x), max(0, oy1 - pad_y)
             ox2, oy2 = min(fw, ox2 + pad_x), min(fh, oy2 + pad_y)
 

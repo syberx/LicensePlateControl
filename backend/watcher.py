@@ -844,8 +844,8 @@ def _detect_plates(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
 
 def _preprocess_crop_for_ocr(jpeg_bytes: bytes, enhance: bool = True) -> bytes:
     """Preprocess license plate crop for better OCR accuracy.
-    - Upscale immer (min 120px Höhe) — hilft OCR immer
-    - CLAHE + Schärfen nur wenn enhance=True (bei dunklen/unscharfen Bildern)
+    - Upscale nur wenn wirklich klein (< 80px Höhe) — große Crops NICHT hochskalieren
+    - CLAHE + leichtes Schärfen nur wenn enhance=True
     Returns preprocessed JPEG bytes."""
     try:
         import cv2
@@ -856,27 +856,21 @@ def _preprocess_crop_for_ocr(jpeg_bytes: bytes, enhance: bool = True) -> bytes:
             return jpeg_bytes
         h, w = img.shape[:2]
 
-        # Upscale: OCR braucht mindestens 120px Höhe — immer anwenden
-        min_h = 120
-        if h < min_h:
-            scale = min_h / h
-            img = cv2.resize(img, (int(w * scale), min_h), interpolation=cv2.INTER_LANCZOS4)
-            h, w = img.shape[:2]
-        elif h < 200:
-            img = cv2.resize(img, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
+        # Upscale nur bei echten Miniaturcrops (< 80px) — bei größeren Bildern verschlechtert 2x-Upscale die OCR
+        if h < 80:
+            scale = 80 / h
+            img = cv2.resize(img, (int(w * scale), 80), interpolation=cv2.INTER_LANCZOS4)
             h, w = img.shape[:2]
 
         if enhance:
-            # CLAHE Kontrast (nur Luminanz-Kanal) — nur bei dunklen/kontrastarmen Bildern nötig
+            # CLAHE Kontrast — nur bei dunklen/kontrastarmen Bildern sinnvoll
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 4))
+            tile_h = max(2, h // 8)
+            tile_w = max(2, w // 16)
+            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(tile_w, tile_h))
             l = clahe.apply(l)
             img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-
-            # Sehr leichtes Schärfen — bei klaren Bildern kann zu viel Schärfen Dünnstriche (1,I) zerstören
-            kernel = np.array([[0, -0.25, 0], [-0.25, 2.0, -0.25], [0, -0.25, 0]])
-            img = cv2.filter2D(img, -1, kernel)
 
         _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
         return buf.tobytes()
@@ -1253,9 +1247,9 @@ def rtsp_processor_thread():
                     else:
                         ox1, oy1, ox2, oy2 = rx1, ry1, rx2, ry2
                     fh, fw = frame.shape[:2]
-                    # Padding: 15% horizontal, 20% vertikal — damit keine Ziffer abgeschnitten wird
-                    pad_x = max(6, int((ox2 - ox1) * 0.10))
-                    pad_y = max(4, int((oy2 - oy1) * 0.08))
+                    # Padding: rechts/links 15%, oben/unten 12% — letzten Buchstaben nicht abschneiden
+                    pad_x = max(8, int((ox2 - ox1) * 0.15))
+                    pad_y = max(5, int((oy2 - oy1) * 0.12))
                     ox1, oy1 = max(0, ox1 - pad_x), max(0, oy1 - pad_y)
                     ox2, oy2 = min(fw, ox2 + pad_x), min(fh, oy2 + pad_y)
 
