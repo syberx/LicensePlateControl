@@ -25,6 +25,7 @@ services:
     ports:
       - "8002:8000"
     volumes:
+      - ./backend:/app
       - ./volumes/events:/events
     environment:
       - TZ=Europe/Berlin
