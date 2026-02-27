@@ -377,18 +377,41 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
     steps = []
     total_start = time.time()
 
+    # --- Engine Health Check (vor Step 1) ---
+    engine_health = {}
+    try:
+        h_resp = requests.get(f"{ENGINE_URL}/health", timeout=3)
+        if h_resp.status_code == 200:
+            engine_health = h_resp.json()
+    except Exception:
+        engine_health = {"error": "Engine nicht erreichbar"}
+
     # --- Step 1: Original Image ---
     t0 = time.time()
     orig_h, orig_w = frame.shape[:2]
-    _, orig_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # Vorschau: auf max 960px runterskalieren (spart Encode-Zeit bei großen Bildern)
+    prev_scale = min(1.0, 960 / orig_w)
+    if prev_scale < 1.0:
+        prev_frame = cv2.resize(frame, (int(orig_w * prev_scale), int(orig_h * prev_scale)), interpolation=cv2.INTER_AREA)
+    else:
+        prev_frame = frame
+    _, orig_buf = cv2.imencode('.jpg', prev_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
     orig_b64 = base64.b64encode(orig_buf.tobytes()).decode('ascii')
+
+    alpr_loaded = engine_health.get("alpr_loaded", False)
+    mock_mode = engine_health.get("mock_mode", False)
+    ov_device = engine_health.get("ov_device", "?")
+    engine_info = f"Engine: {'✓ ALPR geladen' if alpr_loaded else '⚠ Mock-Modus (kein ALPR)'} | Device: {ov_device}"
+    if mock_mode:
+        engine_info += " ← KEIN echtes Modell! Zeiten unbrauchbar."
+
     steps.append({
         "step": 1,
         "name": "Original-Bild",
-        "description": f"Eingelesenes Bild: {orig_w}x{orig_h}px ({len(contents)/1024:.0f} KB)",
+        "description": f"Bild: {orig_w}x{orig_h}px ({len(contents)/1024:.0f} KB) | {engine_info}",
         "image_b64": orig_b64,
         "duration_ms": round((time.time() - t0) * 1000, 1),
-        "details": {"width": orig_w, "height": orig_h, "size_kb": round(len(contents)/1024, 1)},
+        "details": {"width": orig_w, "height": orig_h, "size_kb": round(len(contents)/1024, 1), "engine_health": engine_health},
     })
 
     # --- Step 2: ROI Crop (Bbox only, kein polygon-bitwise_and für Detection) ---
@@ -558,10 +581,10 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
                 # Show the crop that OCR actually receives
                 crop_b64 = base64.b64encode(crop_jpeg_bytes).decode('ascii')
 
-            prep_label = " + Upscale+CLAHE+Schärfen" if preprocess else " + Upscale (kein CLAHE/Schärfen)"
+            prep_label = " + CLAHE+Schärfen" if preprocess else " (nur Upscale wenn klein)"
             steps.append({
                 "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
-                "description": f"Engine-BBox {engine_bbox} → Original [{ox1},{oy1},{ox2},{oy2}] → Crop: {crop_w}x{crop_h}px{prep_label}",
+                "description": f"YOLO-BBox (auf {new_w}x{new_h}) → zurück auf Original {orig_w}x{orig_h} → Crop: {crop_w}x{crop_h}px{prep_label} | Crop aus ORIGINAL-Bild ✓",
                 "image_b64": bbox_vis_b64,
                 "duration_ms": round((time.time() - t0) * 1000, 1),
                 "details": {
