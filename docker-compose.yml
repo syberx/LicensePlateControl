@@ -18,7 +18,8 @@ services:
       - lpc-network
 
   backend:
-    image: ghcr.io/syberx/lpc-backend:latest
+    build: ./backend
+    image: lpc-backend:local
     container_name: licenseplatecontrol-backend
     restart: unless-stopped
     ports:
@@ -42,7 +43,8 @@ services:
       - lpc-network
 
   engine:
-    image: ghcr.io/syberx/lpc-engine:latest
+    build: ./engine
+    image: lpc-engine:local
     container_name: licenseplatecontrol-engine
     restart: unless-stopped
     ports:
@@ -63,7 +65,8 @@ services:
       - lpc-network
 
   frontend:
-    image: ghcr.io/syberx/lpc-frontend:latest
+    build: ./frontend
+    image: lpc-frontend:local
     container_name: licenseplatecontrol-frontend
     restart: unless-stopped
     ports:
