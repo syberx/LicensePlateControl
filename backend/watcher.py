@@ -1288,15 +1288,16 @@ def rtsp_processor_thread():
             _t_engine = analysis_duration
             proc_ms = result.get("processing_time_ms")
 
-            if proc_ms:
-                rtsp_processing_times.append(proc_ms)
+            # Engine-Zeit IMMER tracken — auch ohne Plate-Detection.
+            # detect_ms ist die reine YOLO-Zeit, die für Backpressure entscheidend ist.
+            engine_ms = proc_ms if proc_ms else detect_ms
+            if engine_ms:
+                rtsp_processing_times.append(engine_ms)
                 avg_ms = sum(rtsp_processing_times) / len(rtsp_processing_times)
                 rtsp_status["last_processing_ms"] = round(avg_ms, 1)
-            else:
-                rtsp_status["last_processing_ms"] = None
 
             # Store in debug buffer (showing exactly what the engine saw)
-            _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=proc_ms)
+            _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=engine_ms)
 
             # Encode full original frame (not downscaled) for session storage
             _, orig_frame_buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
@@ -1467,8 +1468,8 @@ def rtsp_processor_thread():
                 rtsp_status["backpressure"] = False
 
             # Performance logging: DEBUG for every frame, WARNING only for sustained backpressure
-            _eng_ms = int(proc_ms) if proc_ms else int(_t_engine * 1000)
-            _net_ms = int((_t_engine - proc_ms / 1000) * 1000) if proc_ms else 0
+            _eng_ms = int(engine_ms) if engine_ms else int(_t_engine * 1000)
+            _net_ms = int((_t_engine - engine_ms / 1000) * 1000) if engine_ms else 0
             _total_ms = int(_t_total * 1000)
 
             # Track consecutive slow frames for real backpressure detection
