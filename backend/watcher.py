@@ -1846,7 +1846,7 @@ def process_startup_series(folder_path: str, imgs: list):
 def _startup_system_check():
     """Run system checks at startup and log detailed status."""
     logger.info("=" * 60)
-    logger.info("  LicensePlateControl Backend v1.5.1 — System Start")
+    logger.info("  LicensePlateControl Backend v1.6.0 — System Start")
     logger.info("=" * 60)
 
     # 1. Engine health check

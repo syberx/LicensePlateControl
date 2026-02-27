@@ -16,7 +16,7 @@ import base64
 import time
 import traceback
 
-VERSION = "1.5.1"
+VERSION = "1.6.0"
 
 alpr = None
 alpr_error = None
