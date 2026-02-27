@@ -989,10 +989,14 @@ def _get_paddle_ocr():
             if _paddle_ocr_instance is None:
                 try:
                     from paddleocr import PaddleOCR
-                    _paddle_ocr_instance = PaddleOCR(
-                        use_angle_cls=True,
-                        lang='en',
-                    )
+                    try:
+                        # PP-OCRv5+ API (PaddlePaddle >= 3.x)
+                        _paddle_ocr_instance = PaddleOCR(lang='en')
+                        _paddle_ocr_instance._api_v5 = True
+                    except Exception:
+                        # Legacy API fallback
+                        _paddle_ocr_instance = PaddleOCR(use_angle_cls=True, lang='en')
+                        _paddle_ocr_instance._api_v5 = False
                     logger.info("PaddleOCR initialized successfully.")
                 except Exception as e:
                     logger.error(f"Failed to initialize PaddleOCR: {e}")
@@ -1020,19 +1024,41 @@ def analyze_with_paddleocr(jpeg_bytes: bytes) -> dict:
         if img is None:
             return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
 
-        results = ocr.ocr(img, cls=True)
+        api_v5 = getattr(ocr, '_api_v5', False)
+        if api_v5:
+            raw = ocr.predict(img)
+            # PP-OCRv5 gibt Liste von Dicts zurück: [{'rec_text': ..., 'rec_score': ...}]
+            results_flat = []
+            if raw:
+                for item in raw:
+                    if isinstance(item, dict):
+                        text = item.get('rec_text', '')
+                        conf = float(item.get('rec_score', 0.0))
+                        results_flat.append((text, conf))
+                    elif isinstance(item, list):
+                        for subitem in item:
+                            if isinstance(subitem, dict):
+                                text = subitem.get('rec_text', '')
+                                conf = float(subitem.get('rec_score', 0.0))
+                                results_flat.append((text, conf))
+        else:
+            raw = ocr.ocr(img, cls=True)
+            results_flat = []
+            if raw and raw[0]:
+                for line in raw[0]:
+                    results_flat.append((line[1][0], float(line[1][1])))
+
         processing_time_ms = (time.time() - start_time) * 1000.0
 
-        if not results or not results[0]:
+        if not results_flat:
             logger.info(f"PaddleOCR: no text detected ({processing_time_ms:.0f}ms)")
             return {"plate": "", "confidence": 0.0, "processing_time_ms": processing_time_ms, "source": "paddleocr"}
 
         # Find the best plate-like text among all detected text regions
         best_plate = ""
         best_conf = 0.0
-        for line in results[0]:
-            text = line[1][0].strip().upper()
-            conf = float(line[1][1])
+        for text, conf in results_flat:
+            text = text.strip().upper()
             # Clean: keep only alphanumeric
             cleaned = re.sub(r'[^A-ZÄÖÜ0-9]', '', text)
             # Plate-like: 4-12 chars, has both letters and digits

@@ -15,6 +15,7 @@ import numpy as np
 import base64
 import time
 import traceback
+from urllib.error import HTTPError
 
 VERSION = "1.6.0"
 
@@ -65,10 +66,22 @@ def init_alpr():
         except Exception as e:
             print(f"INFO: ONNX Runtime check failed ({e}) - using {_ov_device}")
 
-        alpr = ALPR(
-            detector_model="yolo-v9-t-640-license-plate-end2end",
-            ocr_model="cct-s-v1-global-model",
-        )
+        # Retry ALPR init on 504 Gateway Timeout (Hugging Face CDN)
+        max_retries = 4
+        for attempt in range(max_retries):
+            try:
+                alpr = ALPR(
+                    detector_model="yolo-v9-t-640-license-plate-end2end",
+                    ocr_model="cct-s-v1-global-model",
+                )
+                break
+            except HTTPError as e:
+                if e.code == 504 and attempt < max_retries - 1:
+                    wait = 15 * (attempt + 1)
+                    print(f"WARN: Modell-Download 504 Gateway Timeout (Versuch {attempt + 1}/{max_retries}), erneuter Versuch in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
 
         # Introspect ALPR object to find detector and OCR components
         print(f"INFO: ALPR object type: {type(alpr).__name__}")
