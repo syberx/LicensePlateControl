@@ -835,10 +835,19 @@
                     <div class="settings-card">
                         <h3>🔬 Pipeline-Test (Erkennungsablauf)</h3>
                         <p class="desc">Lade ein Testbild hoch (wie es vom RTSP oder der Kamera kommt) und sieh Schritt für Schritt, was passiert: Maskierung → Resize → Detection → BBox-Mapping → Hi-Res Crop → OCR.</p>
-                        <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                        <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap;">
                             <input type="file" accept="image/*" id="debug-pipeline-file"
                                 style="font-size: 0.75rem; color: #e0e0e0; flex: 1; min-width: 180px;"
                                 @change="debugPipelineFile = $event.target.files[0]">
+                            <div style="display: flex; align-items: center; gap: 0.4rem; white-space: nowrap;">
+                                <label style="font-size: 0.72rem; color: rgba(255,255,255,0.5);">Detection-Breite:</label>
+                                <select x-model="detectWidth"
+                                    style="background: rgba(255,255,255,0.08); color: #e0e0e0; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.72rem; outline: none; cursor: pointer;">
+                                    <option value="320">320px ⚡ schnell</option>
+                                    <option value="416">416px ⚖ Standard</option>
+                                    <option value="640">640px 🔍 genau</option>
+                                </select>
+                            </div>
                             <button @click="runDebugPipeline()"
                                 :disabled="!debugPipelineFile || debugPipelineRunning"
                                 style="padding: 0.4rem 1rem; background: #fbbf24; color: #000; border: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; white-space: nowrap;"
@@ -846,7 +855,7 @@
                                 <span x-text="debugPipelineRunning ? 'Analysiere...' : 'Pipeline starten'"></span>
                             </button>
                         </div>
-                        <p style="font-size: 0.7rem; color: rgba(255,255,255,0.4);">Große Bilder werden vor dem Upload automatisch verkleinert (max. 1920×1080), um 413-Fehler zu vermeiden.</p>
+                        <p style="font-size: 0.7rem; color: rgba(255,255,255,0.35);">Große Bilder werden vor dem Upload automatisch verkleinert (max. 1920×1080). Für RTSP-Geschwindigkeit: 416px empfohlen.</p>
 
                         <!-- Results -->
                         <template x-if="debugPipelineResult">
@@ -867,7 +876,7 @@
                                     </div>
                                 </div>
 
-                                <!-- Zeiten-Übersicht: klare Tabelle -->
+                                <!-- Zeiten-Übersicht: klare Tabelle mit Ampel -->
                                 <div style="margin-bottom: 0.75rem; padding: 0.75rem; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
                                     <div style="font-size: 0.7rem; color: rgba(255,255,255,0.5); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">⏱ Zeiten pro Schritt</div>
                                     <table style="width:100%; font-size: 0.8rem; border-collapse: collapse;">
@@ -875,21 +884,26 @@
                                             <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
                                                 <th style="text-align:left; padding: 0.25rem 0.5rem 0.25rem 0; color: rgba(255,255,255,0.5); font-weight: 500;">Schritt</th>
                                                 <th style="text-align:right; padding: 0.25rem 0; color: rgba(255,255,255,0.5); font-weight: 500;">Zeit</th>
-                                                <th style="text-align:left; padding: 0.25rem 0 0.25rem 0.5rem; color: rgba(255,255,255,0.5); font-weight: 500; width: 100px;"></th>
+                                                <th style="text-align:left; padding: 0.25rem 0 0.25rem 0.5rem; color: rgba(255,255,255,0.5); font-weight: 500; width: 110px;"></th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <template x-for="step in debugPipelineResult.steps" :key="step.step">
-                                                <tr :style="(step.name && step.name.includes('detect')) ? 'background: rgba(96,165,250,0.08);' : ''">
-                                                    <td style="padding: 0.35rem 0.5rem 0.35rem 0; color: #e0e0e0;" x-text="step.name"></td>
-                                                    <td style="padding: 0.35rem 0; text-align: right; color: #fbbf24; font-weight: 600;" x-text="step.duration_ms + ' ms'"></td>
-                                                    <td style="padding: 0.35rem 0 0.35rem 0.5rem; font-size: 0.65rem; color: #60a5fa;" x-text="(step.name && step.name.includes('detect')) ? 'RTSP-kritisch' : ''"></td>
+                                                <tr :style="isDetectStep(step) ? 'background: rgba(96,165,250,0.07);' : ''">
+                                                    <td style="padding: 0.35rem 0.5rem 0.35rem 0;" :style="isDetectStep(step) ? 'color: #93c5fd; font-weight:600;' : 'color: #e0e0e0;'" x-text="step.name"></td>
+                                                    <td style="padding: 0.35rem 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums;"
+                                                        :style="isDetectStep(step) ? getDetectTimeColor(step.duration_ms) : 'color: #fbbf24;'"
+                                                        x-text="step.duration_ms + ' ms'"></td>
+                                                    <td style="padding: 0.35rem 0 0.35rem 0.5rem; font-size: 0.65rem;">
+                                                        <span x-show="isDetectStep(step)" :style="getDetectTimeColor(step.duration_ms)"
+                                                            x-text="step.duration_ms < 500 ? '✓ schnell' : step.duration_ms < 1000 ? '⚠ grenzwertig' : '✗ zu langsam'"></span>
+                                                    </td>
                                                 </tr>
                                             </template>
                                         </tbody>
                                     </table>
                                     <p style="font-size: 0.65rem; color: rgba(255,255,255,0.4); margin-top: 0.5rem; margin-bottom: 0;">
-                                        Bei 1 Bild/s RTSP: Nur Detection muss &lt;1000ms sein. OCR läuft erst wenn Kennzeichen gefunden.
+                                        Bei 1 Bild/s RTSP: Detection &lt;500ms = ✓ gut &nbsp;|&nbsp; &lt;1000ms = ⚠ grenzwertig &nbsp;|&nbsp; &gt;1000ms = ✗ zu langsam
                                     </p>
                                 </div>
 
@@ -1154,6 +1168,17 @@
                 debugPipelineRunning: false,
                 debugPipelineResult: null,
                 copyFeedback: false,
+                detectWidth: '416',
+
+                isDetectStep(step) {
+                    return step && step.name && (step.name.includes('detect') || step.name.includes('YOLO'));
+                },
+
+                getDetectTimeColor(ms) {
+                    if (ms < 500) return 'color: #34d399;';
+                    if (ms < 1000) return 'color: #fbbf24;';
+                    return 'color: #f87171;';
+                },
 
                 getDebugCopyText() {
                     if (!this.debugPipelineResult) return '';
@@ -1229,7 +1254,8 @@
                         const fileToSend = await this.resizeImageIfNeeded(this.debugPipelineFile);
                         const formData = new FormData();
                         formData.append('file', fileToSend);
-                        const res = await fetch('/api/debug/pipeline', { method: 'POST', body: formData });
+                        const url = '/api/debug/pipeline?detect_width=' + (this.detectWidth || 416);
+                        const res = await fetch(url, { method: 'POST', body: formData });
                         if (res.ok) {
                             this.debugPipelineResult = await res.json();
                         } else {

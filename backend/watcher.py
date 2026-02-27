@@ -1271,10 +1271,10 @@ def rtsp_processor_thread():
 
             _t_mask = time.time() - _t0
 
-            # Resize ROI crop to max 640px width for YOLO (model expects 640px input anyway)
-            # This avoids sending oversized crops while preserving detail from the full-res source
+            # Resize für YOLO-Detection: 416px reicht zum Finden der Position.
+            # Niedrigere Auflösung = deutlich schneller. OCR läuft auf Hi-Res-Crop.
             eh, ew = frame_for_engine.shape[:2]
-            YOLO_MAX_WIDTH = 640
+            YOLO_MAX_WIDTH = 416
             if ew > YOLO_MAX_WIDTH:
                 scale = YOLO_MAX_WIDTH / ew
                 new_w = YOLO_MAX_WIDTH
@@ -1282,9 +1282,9 @@ def rtsp_processor_thread():
                 frame_for_engine = cv2.resize(frame_for_engine, (new_w, new_h), interpolation=cv2.INTER_AREA)
                 logger.debug(f"Resized ROI crop {ew}x{eh} -> {new_w}x{new_h} for engine")
 
-            # Single JPEG encode: only the engine frame (the part that matters)
+            # Single JPEG encode: niedrigere Qualität (72) reicht für Detection
             _t_enc_start = time.time()
-            success_eng, eng_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            success_eng, eng_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 72])
             if not success_eng:
                 continue
             engine_bytes = eng_buf.tobytes()
@@ -1395,8 +1395,9 @@ def rtsp_processor_thread():
                             "bbox": [ox1, oy1, ox2, oy2],
                         }
 
-            # --- FALLBACK: if 2-pass returned nothing, use single-pass /analyze ---
-            if not plate or plate == "UNKNOWN":
+            # --- FALLBACK: Nur wenn YOLO etwas gefunden hat, aber OCR nichts lesen konnte ---
+            # Kein Fallback bei komplett leerer Detection — kein Kennzeichen im Bild
+            if detections and (not plate or plate == "UNKNOWN"):
                 fallback_result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
                 f_plate = fallback_result.get("plate", "")
                 f_conf = fallback_result.get("confidence", 0.0)

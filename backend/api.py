@@ -349,10 +349,10 @@ def get_debug_stats():
 # --- Debug Pipeline: Step-by-step RTSP simulation ---
 
 @router.post("/api/debug/pipeline")
-async def debug_pipeline(file: UploadFile = File(...)):
+async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 416):
     """Simulate the full RTSP 2-pass pipeline on an uploaded image.
     Returns step-by-step results with intermediate images (base64), timings, and metadata.
-    This exactly replicates what happens to each RTSP frame."""
+    detect_width: YOLO detection resolution (320/416/640). Lower = faster but less accurate."""
     import cv2
     import numpy as np
     import base64
@@ -364,6 +364,8 @@ async def debug_pipeline(file: UploadFile = File(...)):
         ENGINE_URL, _detect_plates, _ocr_plate, _analyze_frame_bytes,
     )
     from database import SessionLocal
+
+    detect_width = max(160, min(detect_width, 640))  # clamp 160..640
 
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
@@ -388,7 +390,9 @@ async def debug_pipeline(file: UploadFile = File(...)):
         "details": {"width": orig_w, "height": orig_h, "size_kb": round(len(contents)/1024, 1)},
     })
 
-    # --- Step 2: ROI Masking ---
+    # --- Step 2: ROI Crop (Bbox only, kein polygon-bitwise_and für Detection) ---
+    # Für die Detection-Phase brauchen wir nur die Position, nicht pixelgenaue Maskierung.
+    # Bbox-Crop reicht völlig aus und ist 10-50x schneller als polygon-bitwise_and.
     t0 = time.time()
     db = SessionLocal()
     polygon_str = get_setting(db, "rtsp_roi_polygon", "")
@@ -407,68 +411,65 @@ async def debug_pipeline(file: UploadFile = File(...)):
                     [int(p["x"] * w), int(p["y"] * h)] for p in points
                 ], np.int32).reshape((-1, 1, 2))
 
-                mask = np.zeros((h, w), dtype=np.uint8)
-                cv2.fillPoly(mask, [poly_pts], 255)
-
                 x_rect, y_rect, w_rect, h_rect = cv2.boundingRect(poly_pts)
                 x_rect = max(0, x_rect)
                 y_rect = max(0, y_rect)
                 w_rect = min(w - x_rect, w_rect)
                 h_rect = min(h - y_rect, h_rect)
 
-                cropped_mask = mask[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect]
+                # Nur Bbox-Crop, kein polygon-Fill/bitwise_and — reicht für YOLO
                 frame_for_engine = frame[y_rect:y_rect+h_rect, x_rect:x_rect+w_rect].copy()
-                frame_for_engine = cv2.bitwise_and(frame_for_engine, frame_for_engine, mask=cropped_mask)
                 has_roi = True
 
-                _, mask_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                mask_b64 = base64.b64encode(mask_buf.tobytes()).decode('ascii')
+                _, crop_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                crop_b64_roi = base64.b64encode(crop_buf.tobytes()).decode('ascii')
                 mh, mw = frame_for_engine.shape[:2]
                 steps.append({
                     "step": 2,
-                    "name": "ROI-Maskierung",
-                    "description": f"ROI angewendet ({len(points)} Punkte) → Crop: {mw}x{mh}px (Offset: {x_rect},{y_rect})",
-                    "image_b64": mask_b64,
+                    "name": "ROI Bbox-Crop",
+                    "description": f"ROI Bbox-Crop ({len(points)} Punkte) → {mw}x{mh}px (Offset: {x_rect},{y_rect}) — kein polygon-Fill für Detection nötig",
+                    "image_b64": crop_b64_roi,
                     "duration_ms": round((time.time() - t0) * 1000, 1),
-                    "details": {"roi_points": len(points), "crop_w": mw, "crop_h": mh, "offset_x": x_rect, "offset_y": y_rect},
+                    "details": {"roi_points": len(points), "crop_w": mw, "crop_h": mh, "offset_x": x_rect, "offset_y": y_rect, "mode": "bbox_crop_only"},
                 })
         except Exception as e:
             steps.append({
-                "step": 2, "name": "ROI-Maskierung",
+                "step": 2, "name": "ROI Bbox-Crop",
                 "description": f"ROI-Fehler: {e}", "image_b64": None,
                 "duration_ms": round((time.time() - t0) * 1000, 1), "details": {"error": str(e)},
             })
     else:
         steps.append({
-            "step": 2, "name": "ROI-Maskierung",
+            "step": 2, "name": "ROI Bbox-Crop",
             "description": "Kein ROI konfiguriert — volles Bild wird verwendet",
             "image_b64": None, "duration_ms": round((time.time() - t0) * 1000, 1),
             "details": {"roi_active": False},
         })
 
-    # --- Step 3: Resize to 640px ---
+    # --- Step 3: Resize für YOLO (detect_width konfigurierbar, Standard 416) ---
+    # Für Detection reicht kleine Auflösung — YOLO findet Positionen auch bei 320px.
+    # Niedrigere Auflösung = viel schneller. OCR läuft erst bei Treffer auf Hi-Res-Crop.
     t0 = time.time()
     eh, ew = frame_for_engine.shape[:2]
-    YOLO_MAX_WIDTH = 640
     resize_scale = 1.0
-    if ew > YOLO_MAX_WIDTH:
-        resize_scale = YOLO_MAX_WIDTH / ew
-        new_w = YOLO_MAX_WIDTH
+    if ew > detect_width:
+        resize_scale = detect_width / ew
+        new_w = detect_width
         new_h = int(eh * resize_scale)
         frame_for_engine = cv2.resize(frame_for_engine, (new_w, new_h), interpolation=cv2.INTER_AREA)
     else:
         new_w, new_h = ew, eh
 
-    _, resize_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    _, resize_buf = cv2.imencode('.jpg', frame_for_engine, [cv2.IMWRITE_JPEG_QUALITY, 72])
     resize_b64 = base64.b64encode(resize_buf.tobytes()).decode('ascii')
     engine_bytes = resize_buf.tobytes()
 
     steps.append({
-        "step": 3, "name": "Resize fuer YOLO",
-        "description": f"{ew}x{eh} → {new_w}x{new_h}px (Faktor: {resize_scale:.3f})",
+        "step": 3, "name": f"Resize für YOLO ({detect_width}px)",
+        "description": f"{ew}x{eh} → {new_w}x{new_h}px — Nur Positionsfindung, Qualität egal",
         "image_b64": resize_b64,
         "duration_ms": round((time.time() - t0) * 1000, 1),
-        "details": {"original_w": ew, "original_h": eh, "resized_w": new_w, "resized_h": new_h, "scale": round(resize_scale, 4)},
+        "details": {"original_w": ew, "original_h": eh, "resized_w": new_w, "resized_h": new_h, "scale": round(resize_scale, 4), "detect_width": detect_width},
     })
 
     # --- Step 4: /detect (YOLO Detection) ---
