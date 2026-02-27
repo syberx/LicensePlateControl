@@ -733,6 +733,35 @@
                                     <div style="color: #e0e0e0; font-weight: 600;">⚡ <span
                                             x-text="status.fps || 0"></span> /s</div>
                                 </div>
+                                <div
+                                    style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Backpressure</div>
+                                    <div style="font-weight: 600;"
+                                        :style="status.backpressure ? 'color: #f87171;' : 'color: #34d399;'"
+                                        x-text="status.backpressure ? 'JA' : 'Nein'">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 2-Pass Pipeline Stats -->
+                            <div style="margin-top: 0.5rem; font-size: 0.7rem; color: rgba(255,255,255,0.35); padding: 0.5rem 0.75rem; background: rgba(255,255,255,0.02); border-radius: 6px;">
+                                <div style="margin-bottom: 0.3rem; color: rgba(255,255,255,0.5); font-weight: 600;">2-Pass Pipeline</div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.3rem;">
+                                    <div>
+                                        <span style="color: #60a5fa;">Detect:</span>
+                                        <span style="color: #e0e0e0;" x-text="(status._detect_hits || 0) + '/' + (status._detect_calls || 0)"></span>
+                                        <span x-show="status._detect_calls > 0" x-text="'(' + Math.round((status._detect_hits || 0) / status._detect_calls * 100) + '%)'"></span>
+                                    </div>
+                                    <div>
+                                        <span style="color: #c084fc;">OCR:</span>
+                                        <span style="color: #e0e0e0;" x-text="(status._ocr_hits || 0) + '/' + (status._ocr_calls || 0)"></span>
+                                        <span x-show="status._ocr_calls > 0" x-text="'(' + Math.round((status._ocr_hits || 0) / status._ocr_calls * 100) + '%)'"></span>
+                                    </div>
+                                    <div>
+                                        <span style="color: #fbbf24;">Fallback:</span>
+                                        <span style="color: #e0e0e0;" x-text="(status._fallback_hits || 0) + '/' + (status._fallback_calls || 0)"></span>
+                                    </div>
+                                </div>
                             </div>
 
                             <!-- Last Detection -->
