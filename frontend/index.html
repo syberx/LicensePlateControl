@@ -481,8 +481,6 @@
         }
 
         .thumb-source-alpr { background: rgba(96,165,250,0.3); color: #60a5fa; }
-        .thumb-source-paddle { background: rgba(251,146,60,0.3); color: #fb923c; }
-        .thumb-source-hybrid { background: rgba(192,132,252,0.3); color: #c084fc; }
 
         /* Trigger star indicator */
         .trigger-star {
@@ -752,9 +750,6 @@
                             </div>
                             <div style="color: rgba(255,255,255,0.4); font-size: 0.75rem; margin-top: 5px; display: flex; align-items: center; gap: 0.5rem;">
                                 📸 <span x-text="e.image_count"></span>
-                                <template x-if="e.recognition_source === 'hybrid'">
-                                    <span style="padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; background: rgba(192,132,252,0.2); color: #c084fc;">HYBRID</span>
-                                </template>
                                 <span style="margin-left: auto;" x-text="openRows.includes(e.id) ? '▲' : '▼'"></span>
                             </div>
                         </div>
@@ -815,24 +810,11 @@
                                     </span>
                                 </div>
                                 <div class="info-item">
-                                    <span class="info-label">Erkennungsmodus</span>
-                                    <span class="info-val">
-                                        <span x-show="e.recognition_source === 'fast_alpr' || !e.recognition_source"
-                                            style="color: #60a5fa;">Fast ALPR
-                                            <span style="font-weight:400;color:rgba(255,255,255,0.4);font-size:0.75rem;">(YOLO v9 + CCT OCR)</span>
-                                        </span>
-                                        <span x-show="e.recognition_source === 'hybrid'"
-                                            style="color: #c084fc;">Hybrid
-                                            <span style="font-weight:400;color:rgba(255,255,255,0.4);font-size:0.75rem;">(Fast ALPR + PaddleOCR Fallback)</span>
-                                        </span>
+                                    <span class="info-label">Engine</span>
+                                    <span class="info-val" style="color: #60a5fa;">Fast ALPR
+                                        <span style="font-weight:400;color:rgba(255,255,255,0.4);font-size:0.75rem;">(YOLO v9 + CCT OCR)</span>
                                     </span>
                                 </div>
-                                <template x-if="e.vlm_processing_time_ms">
-                                    <div class="info-item">
-                                        <span class="info-label">PaddleOCR Dauer</span>
-                                        <span class="info-val" x-text="Number(e.vlm_processing_time_ms).toFixed(0) + ' ms'"></span>
-                                    </div>
-                                </template>
                                 <div class="info-item">
                                     <span class="info-label">Serien-ID (Motion Burst)</span>
                                     <span class="info-val"
@@ -872,7 +854,7 @@
                                                             <span x-text="img.confidence ? (img.confidence * 100).toFixed(0) + '%' : ''"></span>
                                                             <span x-text="img.processing_time_ms ? ' · ' + Number(img.processing_time_ms).toFixed(0) + 'ms' : ''"></span>
                                                             <br>
-                                                            <span x-text="img.recognition_source === 'paddleocr' ? 'PaddleOCR' : img.recognition_source === 'hybrid' ? 'Hybrid' : 'Fast ALPR'"></span>
+                                                            <span>Fast ALPR</span>
                                                         </span>
                                                     </div>
                                                 </div>
@@ -902,10 +884,7 @@
                                                 </div>
                                             </template>
                                             <template x-if="img.recognition_source">
-                                                <div class="thumb-source-label"
-                                                    :class="img.recognition_source === 'paddleocr' ? 'thumb-source-paddle' : img.recognition_source === 'hybrid' ? 'thumb-source-hybrid' : 'thumb-source-alpr'"
-                                                    x-text="img.recognition_source === 'paddleocr' ? 'Paddle' : img.recognition_source === 'hybrid' ? 'Hybrid' : 'ALPR'">
-                                                </div>
+                                                <div class="thumb-source-label thumb-source-alpr">ALPR</div>
                                             </template>
                                             <template x-if="img.processing_time_ms">
                                                 <div class="thumb-time-label"

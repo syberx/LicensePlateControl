@@ -416,9 +416,6 @@ def process_first_image(folder_path: str, img_path: str):
     """FAST-FIRST: Process the first image immediately, create event, trigger HA if needed."""
     logger.info(f"⚡ FAST-FIRST: Processing {os.path.basename(img_path)} immediately")
 
-    cascade_settings = _get_cached_recognition_settings()
-    rec_mode = cascade_settings["recognition_mode"]
-
     result = process_single_image(img_path)
 
     plate = result.get("plate", "")
@@ -467,10 +464,10 @@ def process_first_image(folder_path: str, img_path: str):
             mqtt_triggered=mqtt_triggered,
             trigger_timestamp=trigger_ts,
             processing_time_ms=result.get("processing_time_ms"),
-            recognition_source=rec_mode,
+            recognition_source="fast_alpr",
         )
         db.add(new_event)
-        db.flush()  # Get the ID without committing
+        db.flush()
         event_id = new_event.id
         
         # Store image in DB and delete file — first image is the trigger if it detected a plate and decision is allowed
@@ -547,10 +544,6 @@ def process_followup_images(folder_path: str):
     best_plate = series["best_plate"]
     best_conf = series["best_confidence"]
     
-    # Store per-image results for DB insertion
-    cascade_settings = _get_cached_recognition_settings()
-    rec_mode = cascade_settings["recognition_mode"]
-
     image_results = []
     for img_path in process_list:
         result = process_single_image(img_path)
@@ -711,8 +704,7 @@ rtsp_status = {
     "camera_name": "",
     "interval_mode": "seconds",
     "interval_value": 3,
-    "backpressure": False,         # True if analysis takes longer than interval
-    "recognition_mode": "fast_alpr",  # Current recognition mode
+    "backpressure": False,
     # 2-pass stats
     "_detect_calls": 0,
     "_detect_hits": 0,
@@ -860,29 +852,6 @@ def _ocr_plate(jpeg_bytes: bytes, filename: str = "crop.jpg") -> dict:
     return {"plate": "", "confidence": 0.0, "processing_time_ms": None}
 
 
-# --- Recognition Settings (cached) ---
-
-def _get_recognition_settings():
-    """Read recognition settings from DB with defaults."""
-    db = SessionLocal()
-    try:
-        return {
-            "recognition_mode": get_setting(db, "recognition_mode", "fast_alpr"),
-            "confidence_threshold": float(get_setting(db, "vision_llm_confidence_threshold", "0.6")),
-        }
-    finally:
-        db.close()
-
-_recognition_cache = {"settings": None, "last_check": 0.0}
-_RECOGNITION_CACHE_TTL = 10.0
-
-def _get_cached_recognition_settings():
-    """Return cached recognition settings, refreshing from DB at most every 10 seconds."""
-    now = time.time()
-    if now - _recognition_cache["last_check"] > _RECOGNITION_CACHE_TTL or _recognition_cache["settings"] is None:
-        _recognition_cache["settings"] = _get_recognition_settings()
-        _recognition_cache["last_check"] = now
-    return _recognition_cache["settings"]
 
 
 rtsp_latest_frame_data = None
@@ -1164,11 +1133,6 @@ def rtsp_processor_thread():
                 elapsed = capture_times[-1] - capture_times[0]
                 rtsp_status["fps"] = round(len(capture_times) / max(elapsed, 1), 2)
 
-            # --- Recognition mode selection ---
-            cascade_settings = _get_cached_recognition_settings()
-            rec_mode = cascade_settings["recognition_mode"]
-            rtsp_status["recognition_mode"] = rec_mode
-
             # === 2-PASS ARCHITECTURE with FALLBACK ===
             # Pass 1: /detect on 640px (YOLO only, ~100-200ms)
             # Pass 2: /ocr on hi-res crop from original (~50-100ms)
@@ -1325,7 +1289,7 @@ def rtsp_processor_thread():
                     rtsp_active_session["decision"] = decision
                     rtsp_active_session["has_triggered"] = False
                     rtsp_active_session["trigger_timestamp"] = None
-                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}' (conf={confidence:.2f}, mode={rec_mode})")
+                    logger.info(f"📹 RTSP: New vehicle session started with '{plate}' (conf={confidence:.2f})")
                 else:
                     # Update active session timer
                     rtsp_active_session["last_seen_time"] = now_str
@@ -1373,7 +1337,7 @@ def rtsp_processor_thread():
                         "confidence": 0.0,
                         "proc_ms": proc_ms,
                         "has_plate": False,
-                        "source": rec_mode,
+                        "source": "fast_alpr",
                     })
                 
                 # Update status UI
@@ -1418,7 +1382,7 @@ def rtsp_processor_thread():
                         ha_triggered=rtsp_active_session.get("has_triggered", False),
                         trigger_timestamp=rtsp_active_session.get("trigger_timestamp"),
                         processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None,
-                        recognition_source=rec_mode,
+                        recognition_source="fast_alpr",
                     )
                     db.add(event)
                     db.flush()
@@ -1675,10 +1639,9 @@ def _startup_system_check():
     except Exception as e:
         logger.warning(f"  Engine: UNREACHABLE — {e} (will retry on first image)")
 
-    # 2. Recognition mode
+    # 2. System settings
     db = SessionLocal()
     try:
-        rec_mode = get_setting(db, "recognition_mode", "fast_alpr")
         ha_enabled = get_setting(db, "ha_enabled", "true").lower() == "true"
         mqtt_enabled = get_setting(db, "mqtt_enabled", "false").lower() == "true"
         rtsp_enabled = get_setting(db, "rtsp_enabled", "false").lower() == "true"
@@ -1689,7 +1652,7 @@ def _startup_system_check():
     finally:
         db.close()
 
-    logger.info(f"  Recognition Mode: {rec_mode.upper()}")
+    logger.info(f"  Engine: Fast ALPR (YOLO v9 + CCT OCR) — 2-Pass Pipeline")
     logger.info(f"  Active Plates: {plate_count} | Stored Events: {event_count}")
     logger.info(f"  Integrations: HA={'ON' if ha_enabled else 'OFF'} | MQTT={'ON' if mqtt_enabled else 'OFF'}")
     logger.info(f"  Inputs: Folder Watch={'ON' if folder_watch else 'OFF'} | RTSP={'ON' if rtsp_enabled else 'OFF'}")

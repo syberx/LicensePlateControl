@@ -439,8 +439,6 @@
                     Broker</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'rtsp'}" @click.prevent="tab = 'rtsp'">RTSP
                     Stream</a>
-                <a href="#" class="sidebar-link" :class="{'active': tab === 'recognition'}"
-                    @click.prevent="tab = 'recognition'">Erkennung / LLM</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'storage'}"
                     @click.prevent="tab = 'storage'">Speicher / Bereinigung</a>
                 <a href="#" class="sidebar-link" :class="{'active': tab === 'pipeline'}"
@@ -519,45 +517,6 @@
                             <div class="form-group">
                                 <label class="form-label">Passwort (Optional)</label>
                                 <input type="password" id="mqtt_pass" class="form-input" placeholder="••••••••">
-                            </div>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Recognition / Vision LLM Tab -->
-                <div x-show="tab === 'recognition'" x-cloak x-data="recognitionPanel()" x-init="init()">
-                    <div class="settings-card">
-                        <h3>Erkennungsmodus</h3>
-                        <p class="desc">Wähle, wie Kennzeichen erkannt werden. Das Standard-Modell (Fast ALPR) nutzt
-                            YOLO + OCR. Im Hybrid-Modus wird bei unsicheren Ergebnissen automatisch
-                            PaddleOCR als Fallback genutzt.</p>
-
-                        <form id="recognition-form" onsubmit="return false;">
-                            <div class="form-group" style="margin-top: 1.5rem;">
-                                <label class="form-label">Erkennungsmodus</label>
-                                <select id="recognition_mode" class="form-input"
-                                    style="background: rgba(255,255,255,0.06); color: #e0e0e0; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem; border-radius: 8px;">
-                                    <option value="fast_alpr">Fast ALPR (Standard — YOLO + OCR)</option>
-                                    <option value="hybrid">Hybrid (Fast ALPR + PaddleOCR-Fallback)</option>
-                                </select>
-                                <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
-                                    <strong>Fast ALPR:</strong> Schnell (~50ms), YOLO-Erkennung + CCT-OCR. Kein Fallback.<br>
-                                    <strong>Hybrid (2-Stufen):</strong><br>
-                                    &nbsp;&nbsp;1. Fast ALPR (~50ms) — immer zuerst<br>
-                                    &nbsp;&nbsp;2. PaddleOCR (~100ms) — wenn Confidence zu niedrig
-                                </p>
-                            </div>
-
-                            <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid rgba(255,255,255,0.08);">
-                                <div class="form-group" style="margin-top: 1.5rem;">
-                                    <label class="form-label">Confidence-Schwellwert (nur Hybrid-Modus)</label>
-                                    <input type="number" id="vision_llm_confidence_threshold" class="form-input"
-                                        placeholder="0.6" min="0" max="1" step="0.05" value="0.6">
-                                    <p class="desc" style="margin-top: 0.5rem; margin-bottom: 0;">
-                                        Liegt die Fast-ALPR-Confidence unter diesem Wert, wird PaddleOCR als
-                                        Fallback aufgerufen. Standard: 0.6 (60%).
-                                    </p>
-                                </div>
                             </div>
                         </form>
                     </div>
@@ -714,11 +673,8 @@
                                 </div>
                                 <div
                                     style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
-                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Modus</div>
-                                    <div style="font-weight: 600;"
-                                        :style="status.recognition_mode === 'hybrid' ? 'color: #c084fc;' : 'color: #60a5fa;'"
-                                        x-text="status.recognition_mode === 'hybrid' ? 'Hybrid' : 'Fast ALPR'">
-                                    </div>
+                                    <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.15rem;">Engine</div>
+                                    <div style="font-weight: 600; color: #60a5fa;">Fast ALPR</div>
                                 </div>
                                 <div
                                     style="background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 6px;">
@@ -1115,7 +1071,6 @@
                 'ha_enabled', 'ha_url', 'ha_service', 'ha_token',
                 'mqtt_enabled', 'mqtt_broker', 'mqtt_port', 'mqtt_topic', 'mqtt_user', 'mqtt_pass',
                 'rtsp_enabled', 'rtsp_url', 'rtsp_interval', 'rtsp_interval_mode', 'rtsp_camera_name', 'rtsp_roi_polygon',
-                'recognition_mode', 'vision_llm_confidence_threshold',
                 'cleanup_days_known', 'cleanup_days_unknown', 'folder_watch_enabled'
             ];
             let hasError = false;
@@ -1164,13 +1119,6 @@
             }
         }
 
-        function recognitionPanel() {
-            return {
-                init() {
-                    // Settings are loaded by the global loadSettings() function
-                }
-            };
-        }
 
         function pipelinePanel() {
             return {
