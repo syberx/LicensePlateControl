@@ -928,11 +928,17 @@ def _preprocess_crop_for_ocr(jpeg_bytes: bytes) -> bytes:
             return jpeg_bytes
         h, w = img.shape[:2]
 
-        # Upscale: Kennzeichen OCR braucht mindestens ~80px Höhe
-        min_h = 90
+        # Upscale: Kennzeichen OCR braucht mindestens 100px Höhe
+        # LANCZOS4 = schärfstes Upscaling, wichtig bei pixeligen kleinen Crops
+        min_h = 100
         if h < min_h:
             scale = min_h / h
-            img = cv2.resize(img, (int(w * scale), min_h), interpolation=cv2.INTER_CUBIC)
+            img = cv2.resize(img, (int(w * scale), min_h), interpolation=cv2.INTER_LANCZOS4)
+            h, w = img.shape[:2]
+        elif h < 150:
+            # Kleines aber nicht winziges Bild: 2x hochskalieren für bessere OCR
+            img = cv2.resize(img, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
+            h, w = img.shape[:2]
             h, w = img.shape[:2]
 
         # CLAHE Kontrast (nur Luminanz-Kanal)

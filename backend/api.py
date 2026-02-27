@@ -530,12 +530,20 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
             ox1, oy1 = max(0, ox1 - pad_x), max(0, oy1 - pad_y)
             ox2, oy2 = min(fw, ox2 + pad_x), min(fh, oy2 + pad_y)
 
-            # Draw on original image
-            orig_with_bbox = frame.copy()
-            cv2.rectangle(orig_with_bbox, (ox1, oy1), (ox2, oy2), (0, 255, 0), 3)
-            cv2.putText(orig_with_bbox, f"Crop: {ox2-ox1}x{oy2-oy1}px", (ox1, oy1-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            _, bbox_vis_buf = cv2.imencode('.jpg', orig_with_bbox, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            # Visualization: auf max 960px runterskalieren vor JPEG-Encode (spart 200-400ms bei 4K)
+            vis_max_w = 960
+            vis_scale = min(1.0, vis_max_w / orig_w)
+            if vis_scale < 1.0:
+                vis_frame = cv2.resize(frame, (int(orig_w * vis_scale), int(orig_h * vis_scale)), interpolation=cv2.INTER_AREA)
+                vx1, vy1 = int(ox1 * vis_scale), int(oy1 * vis_scale)
+                vx2, vy2 = int(ox2 * vis_scale), int(oy2 * vis_scale)
+            else:
+                vis_frame = frame.copy()
+                vx1, vy1, vx2, vy2 = ox1, oy1, ox2, oy2
+            cv2.rectangle(vis_frame, (vx1, vy1), (vx2, vy2), (0, 255, 0), 2)
+            cv2.putText(vis_frame, f"Crop: {ox2-ox1}x{oy2-oy1}px", (vx1, max(0, vy1-8)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1)
+            _, bbox_vis_buf = cv2.imencode('.jpg', vis_frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
             bbox_vis_b64 = base64.b64encode(bbox_vis_buf.tobytes()).decode('ascii')
 
             hires_crop = frame[oy1:oy2, ox1:ox2]
@@ -545,14 +553,17 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
                 _, crop_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 from watcher import _preprocess_crop_for_ocr
                 raw_crop_bytes = crop_buf.tobytes()
-                if preprocess:
+                # Auto-Preprocessing: immer AN wenn Crop zu klein (pixelig)
+                crop_h_px = oy2 - oy1
+                auto_preprocess = preprocess or (crop_h_px < 60)
+                if auto_preprocess:
                     crop_jpeg_bytes = _preprocess_crop_for_ocr(raw_crop_bytes)
                 else:
                     crop_jpeg_bytes = raw_crop_bytes
                 # Show the crop that OCR actually receives
                 crop_b64 = base64.b64encode(crop_jpeg_bytes).decode('ascii')
 
-            prep_label = " + Preprocessing (CLAHE+Schärfen)" if preprocess else " — Preprocessing AUS (Rohbild)"
+            prep_label = " + Preprocessing (CLAHE+Schärfen)" if (preprocess or (oy2 - oy1) < 60) else " — Preprocessing AUS"
             steps.append({
                 "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
                 "description": f"Engine-BBox {engine_bbox} → Original [{ox1},{oy1},{ox2},{oy2}] → Crop: {crop_w}x{crop_h}px{prep_label}",
