@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-onnxruntime-openvino
+onnxruntime-openvino==1.17.3
 fast-alpr
 python-multipart
 opencv-python-headless

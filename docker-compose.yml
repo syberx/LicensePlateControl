@@ -54,10 +54,12 @@ services:
     volumes:
       - ./volumes/models:/models
       - ./volumes/events:/events
+      - ./volumes/ov-cache:/root/.cache/openvino
     environment:
       - TZ=Europe/Berlin
       - HF_HOME=/models
       - ORT_OPENVINO_DEVICE=GPU   # Tell onnxruntime-openvino to use Intel GPU (falls back to CPU if unavailable)
+      - OV_CACHE_DIR=/root/.cache/openvino
     # Intel iGPU passthrough for OpenVINO acceleration
     devices:
       - /dev/dri:/dev/dri
