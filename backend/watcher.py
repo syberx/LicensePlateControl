@@ -988,6 +988,10 @@ def _get_paddle_ocr():
         with _paddle_ocr_lock:
             if _paddle_ocr_instance is None:
                 try:
+                    import os as _os
+                    # oneDNN/MKL deaktivieren — inkompatibel mit manchen CPUs (ConvertPirAttribute Fehler)
+                    _os.environ['FLAGS_use_mkldnn'] = '0'
+                    _os.environ['FLAGS_use_mkldnn_weight_cache'] = '0'
                     from paddleocr import PaddleOCR
                     try:
                         # PP-OCRv5+ API (PaddlePaddle >= 3.x)
