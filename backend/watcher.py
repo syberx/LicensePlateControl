@@ -992,7 +992,6 @@ def _get_paddle_ocr():
                     _paddle_ocr_instance = PaddleOCR(
                         use_angle_cls=True,
                         lang='en',
-                        use_gpu=False,
                     )
                     logger.info("PaddleOCR initialized successfully.")
                 except Exception as e:
