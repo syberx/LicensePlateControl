@@ -857,17 +857,16 @@ def _preprocess_crop_for_ocr(jpeg_bytes: bytes) -> bytes:
             return jpeg_bytes
         h, w = img.shape[:2]
 
-        # Upscale: Kennzeichen OCR braucht mindestens 100px Höhe
-        # LANCZOS4 = schärfstes Upscaling, wichtig bei pixeligen kleinen Crops
-        min_h = 100
+        # Upscale: OCR braucht mindestens 120px Höhe für zuverlässige Zeichenerkennung
+        # LANCZOS4 = schärfstes Upscaling
+        min_h = 120
         if h < min_h:
             scale = min_h / h
             img = cv2.resize(img, (int(w * scale), min_h), interpolation=cv2.INTER_LANCZOS4)
             h, w = img.shape[:2]
-        elif h < 150:
-            # Kleines aber nicht winziges Bild: 2x hochskalieren für bessere OCR
+        elif h < 200:
+            # Bild schon okay aber nochmal 2x hochskalieren hilft OCR bei feinen Zeichen
             img = cv2.resize(img, (w * 2, h * 2), interpolation=cv2.INTER_LANCZOS4)
-            h, w = img.shape[:2]
             h, w = img.shape[:2]
 
         # CLAHE Kontrast (nur Luminanz-Kanal)
@@ -1265,9 +1264,8 @@ def rtsp_processor_thread():
                     if ox2 > ox1 and oy2 > oy1:
                         hires_crop = frame[oy1:oy2, ox1:ox2]
                         _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        # Preprocessing nur wenn Bild klein/dunkel — bei guten Kameras meist nicht nötig
-                        crop_h_px = oy2 - oy1
-                        crop_jpeg_bytes = _preprocess_crop_for_ocr(hires_buf.tobytes()) if crop_h_px < 60 else hires_buf.tobytes()
+                        # Preprocessing immer anwenden — verbessert OCR-Genauigkeit (Upscale+CLAHE+Schärfen)
+                        crop_jpeg_bytes = _preprocess_crop_for_ocr(hires_buf.tobytes())
 
                         # --- Pass 2: OCR on hi-res crop ---
                         rtsp_status["_ocr_calls"] = rtsp_status.get("_ocr_calls", 0) + 1

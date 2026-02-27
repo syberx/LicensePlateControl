@@ -553,17 +553,12 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
                 _, crop_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
                 from watcher import _preprocess_crop_for_ocr
                 raw_crop_bytes = crop_buf.tobytes()
-                # Auto-Preprocessing: immer AN wenn Crop zu klein (pixelig)
-                crop_h_px = oy2 - oy1
-                auto_preprocess = preprocess or (crop_h_px < 60)
-                if auto_preprocess:
-                    crop_jpeg_bytes = _preprocess_crop_for_ocr(raw_crop_bytes)
-                else:
-                    crop_jpeg_bytes = raw_crop_bytes
+                # Preprocessing immer anwenden — Upscale+CLAHE+Schärfen verbessert OCR-Genauigkeit
+                crop_jpeg_bytes = _preprocess_crop_for_ocr(raw_crop_bytes)
                 # Show the crop that OCR actually receives
                 crop_b64 = base64.b64encode(crop_jpeg_bytes).decode('ascii')
 
-            prep_label = " + Preprocessing (CLAHE+Schärfen)" if (preprocess or (oy2 - oy1) < 60) else " — Preprocessing AUS"
+            prep_label = " + Preprocessing (CLAHE+Schärfen+Upscale)"
             steps.append({
                 "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
                 "description": f"Engine-BBox {engine_bbox} → Original [{ox1},{oy1},{ox2},{oy2}] → Crop: {crop_w}x{crop_h}px{prep_label}",
