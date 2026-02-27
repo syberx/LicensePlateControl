@@ -784,6 +784,13 @@ rtsp_status = {
     "interval_value": 3,
     "backpressure": False,         # True if analysis takes longer than interval
     "recognition_mode": "fast_alpr",  # Current recognition mode
+    # 2-pass stats
+    "_detect_calls": 0,
+    "_detect_hits": 0,
+    "_ocr_calls": 0,
+    "_ocr_hits": 0,
+    "_fallback_calls": 0,
+    "_fallback_hits": 0,
 }
 
 # Used to group identical vehicles into a single event instead of repeating DB writes
@@ -1319,22 +1326,25 @@ def rtsp_processor_thread():
             rec_mode = cascade_settings["recognition_mode"]
             rtsp_status["recognition_mode"] = rec_mode
 
-            # === 2-PASS ARCHITECTURE ===
-            # Pass 1: YOLO detection on 640px downscaled image (fast, ~100-200ms)
-            # Pass 2: OCR on hi-res crop from original frame (~50-100ms)
-            # Total: ~200-300ms instead of ~1500-3000ms single-pass
+            # === 2-PASS ARCHITECTURE with FALLBACK ===
+            # Pass 1: /detect on 640px (YOLO only, ~100-200ms)
+            # Pass 2: /ocr on hi-res crop from original (~50-100ms)
+            # Fallback: /analyze single-pass if 2-pass returns nothing
             analysis_start = time.time()
-
-            detect_result = _detect_plates(engine_bytes, f"rtsp_{cam_name}.jpg")
-            detections = detect_result.get("detections", [])
-            detect_ms = detect_result.get("processing_time_ms")
 
             plate = ""
             confidence = 0.0
-            ocr_ms = None
             result = {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "fast_alpr", "crop_jpeg": None, "bbox": None}
+            used_fallback = False
+
+            # --- Pass 1: Detection ---
+            detect_result = _detect_plates(engine_bytes, f"rtsp_{cam_name}.jpg")
+            detections = detect_result.get("detections", [])
+            detect_ms = detect_result.get("processing_time_ms")
+            rtsp_status["_detect_calls"] = rtsp_status.get("_detect_calls", 0) + 1
 
             if detections:
+                rtsp_status["_detect_hits"] = rtsp_status.get("_detect_hits", 0) + 1
                 # Take best detection (highest confidence)
                 best_det = max(detections, key=lambda d: d.get("confidence", 0))
                 engine_bbox = best_det.get("bbox")
@@ -1346,12 +1356,10 @@ def rtsp_processor_thread():
                         inv_scale = 1.0 / scale  # scale was set during resize above
                     else:
                         inv_scale = 1.0
-                    # Bbox in ROI-crop coordinate space
                     rx1 = int(ex1 * inv_scale)
                     ry1 = int(ey1 * inv_scale)
                     rx2 = int(ex2 * inv_scale)
                     ry2 = int(ey2 * inv_scale)
-                    # Add ROI offset to get original frame coordinates
                     if has_roi:
                         ox1 = rx1 + x_rect
                         oy1 = ry1 + y_rect
@@ -1359,24 +1367,24 @@ def rtsp_processor_thread():
                         oy2 = ry2 + y_rect
                     else:
                         ox1, oy1, ox2, oy2 = rx1, ry1, rx2, ry2
-                    # Clamp to original frame bounds
                     fh, fw = frame.shape[:2]
                     ox1, oy1 = max(0, ox1), max(0, oy1)
                     ox2, oy2 = min(fw, ox2), min(fh, oy2)
 
                     if ox2 > ox1 and oy2 > oy1:
-                        # Hi-res crop from original 1080p frame
                         hires_crop = frame[oy1:oy2, ox1:ox2]
                         _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
                         crop_jpeg_bytes = hires_buf.tobytes()
-                        crop_h, crop_w = hires_crop.shape[:2]
-                        logger.debug(f"2-pass: Hi-res crop {crop_w}x{crop_h}px from {fw}x{fh} frame")
 
-                        # Pass 2: OCR on hi-res crop
+                        # --- Pass 2: OCR on hi-res crop ---
+                        rtsp_status["_ocr_calls"] = rtsp_status.get("_ocr_calls", 0) + 1
                         ocr_result = _ocr_plate(crop_jpeg_bytes, f"rtsp_{cam_name}_crop.jpg")
                         plate = ocr_result.get("plate", "")
                         confidence = ocr_result.get("confidence", 0.0)
                         ocr_ms = ocr_result.get("processing_time_ms")
+
+                        if plate and plate != "UNKNOWN":
+                            rtsp_status["_ocr_hits"] = rtsp_status.get("_ocr_hits", 0) + 1
 
                         result = {
                             "plate": plate,
@@ -1386,6 +1394,48 @@ def rtsp_processor_thread():
                             "crop_jpeg": crop_jpeg_bytes,
                             "bbox": [ox1, oy1, ox2, oy2],
                         }
+
+            # --- FALLBACK: if 2-pass returned nothing, use single-pass /analyze ---
+            if not plate or plate == "UNKNOWN":
+                fallback_result = _analyze_frame_bytes(engine_bytes, f"rtsp_{cam_name}.jpg")
+                f_plate = fallback_result.get("plate", "")
+                f_conf = fallback_result.get("confidence", 0.0)
+                if f_plate and f_plate != "UNKNOWN" and f_conf > 0.3:
+                    plate = f_plate
+                    confidence = f_conf
+                    used_fallback = True
+                    rtsp_status["_fallback_hits"] = rtsp_status.get("_fallback_hits", 0) + 1
+
+                    # Extract hi-res crop from original frame using fallback bbox
+                    f_bbox = fallback_result.get("bbox")
+                    crop_jpeg = fallback_result.get("crop_jpeg")
+                    if f_bbox and len(f_bbox) == 4:
+                        fx1, fy1, fx2, fy2 = f_bbox
+                        if ew > YOLO_MAX_WIDTH:
+                            f_inv = 1.0 / scale
+                        else:
+                            f_inv = 1.0
+                        frx1, fry1 = int(fx1 * f_inv), int(fy1 * f_inv)
+                        frx2, fry2 = int(fx2 * f_inv), int(fy2 * f_inv)
+                        if has_roi:
+                            frx1 += x_rect; fry1 += y_rect; frx2 += x_rect; fry2 += y_rect
+                        fh, fw = frame.shape[:2]
+                        frx1, fry1 = max(0, frx1), max(0, fry1)
+                        frx2, fry2 = min(fw, frx2), min(fh, fry2)
+                        if frx2 > frx1 and fry2 > fry1:
+                            fb_crop = frame[fry1:fry2, frx1:frx2]
+                            _, fb_buf = cv2.imencode('.jpg', fb_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                            crop_jpeg = fb_buf.tobytes()
+
+                    result = {
+                        "plate": plate,
+                        "confidence": confidence,
+                        "processing_time_ms": fallback_result.get("processing_time_ms"),
+                        "source": "fast_alpr",
+                        "crop_jpeg": crop_jpeg,
+                        "bbox": fallback_result.get("bbox"),
+                    }
+                rtsp_status["_fallback_calls"] = rtsp_status.get("_fallback_calls", 0) + 1
 
             analysis_duration = time.time() - analysis_start
             _t_engine = analysis_duration
@@ -1796,7 +1846,7 @@ def process_startup_series(folder_path: str, imgs: list):
 def _startup_system_check():
     """Run system checks at startup and log detailed status."""
     logger.info("=" * 60)
-    logger.info("  LicensePlateControl Backend v1.5.0 — System Start")
+    logger.info("  LicensePlateControl Backend v1.5.1 — System Start")
     logger.info("=" * 60)
 
     # 1. Engine health check

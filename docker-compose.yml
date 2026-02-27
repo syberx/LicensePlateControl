@@ -19,9 +19,6 @@ services:
 
   backend:
     image: ghcr.io/syberx/lpc-backend:latest
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
     container_name: licenseplatecontrol-backend
     restart: unless-stopped
     ports:
@@ -46,9 +43,6 @@ services:
 
   engine:
     image: ghcr.io/syberx/lpc-engine:latest
-    build:
-      context: ./engine
-      dockerfile: Dockerfile
     container_name: licenseplatecontrol-engine
     restart: unless-stopped
     ports:
@@ -70,9 +64,6 @@ services:
 
   frontend:
     image: ghcr.io/syberx/lpc-frontend:latest
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
     container_name: licenseplatecontrol-frontend
     restart: unless-stopped
     ports:
