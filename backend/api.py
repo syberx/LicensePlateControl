@@ -576,8 +576,9 @@ async def debug_pipeline(file: UploadFile = File(...)):
             "duration_ms": 0, "details": {},
         })
 
-    # --- Step 7 (optional): Fallback /analyze ---
-    if not plate or plate == "UNKNOWN":
+    # --- Step 7 (optional): Fallback /analyze nur wenn Detection war, aber OCR fehlgeschlagen ---
+    # Kein Fallback wenn YOLO gar nichts gefunden hat — dann ist das Bild leer, /analyze unnötig
+    if detections and (not plate or plate == "UNKNOWN"):
         t0 = time.time()
         fallback_result = _analyze_frame_bytes(engine_bytes, "debug_fallback.jpg")
         f_plate = fallback_result.get("plate", "")
