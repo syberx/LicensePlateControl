@@ -4,6 +4,7 @@ import glob
 import threading
 from datetime import datetime, timedelta
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import re
 import uuid
@@ -14,6 +15,14 @@ import models
 import logging
 import json
 import paho.mqtt.client as mqtt
+
+# Persistente HTTP-Session für Engine-Calls (Connection-Pooling + Keep-Alive)
+# Verhindert TIME_WAIT-Akkumulation und neue TCP-Handshakes pro Frame
+_engine_http = requests.Session()
+_engine_http.headers.update({"Connection": "keep-alive"})
+
+# Background-Thread-Pool für blockierende DB-Writes (Session-Finalisierung)
+_db_write_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rtsp_db")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -246,7 +255,7 @@ def process_single_image(img_path: str) -> dict:
         with open(img_path, 'rb') as f:
             img_bytes = f.read()
         files = {'file': (os.path.basename(img_path), img_bytes, 'image/jpeg')}
-        response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
+        response = _engine_http.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
 
         if response.status_code == 200:
             data = response.json()
@@ -962,12 +971,12 @@ def _get_cached_polygon() -> str:
 # Tracks last-seen timestamp per plate to prevent spam events (e.g., parked cars)
 rtsp_cooldown = {}
 
-# --- Debug Frame Buffer (1-hour rolling storage) ---
-# Stores ALL analyzed frames with metadata for forensic debugging.
-# Each entry: {"id": int, "timestamp": str, "jpeg": bytes, "plate": str, "confidence": float, "processing_ms": float}
-debug_frame_buffer = deque(maxlen=3600)  # Max ~1h at 1fps
+# --- Debug Frame Buffer (~5 Min Rolling Storage) ---
+# Stores last N analyzed frames with metadata for forensic debugging.
+# Maxlen=300: bei 1fps ~5min, bei 3s-Intervall ~15min — hält RAM-Druck klein (<30MB)
+debug_frame_buffer = deque(maxlen=300)
 debug_frame_counter = 0
-DEBUG_BUFFER_MAX_AGE_SECONDS = 3600  # 1 hour
+DEBUG_BUFFER_MAX_AGE_SECONDS = 300  # 5 Minuten
 
 def _store_debug_frame(jpeg_bytes, plate="", confidence=0.0, processing_ms=None):
     """Store a frame in the debug ring buffer with auto-purge of old entries."""
@@ -995,7 +1004,7 @@ def _analyze_frame_bytes(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict
     """
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
-        response = requests.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
+        response = _engine_http.post(f"{ENGINE_URL}/analyze", files=files, timeout=10)
         if response.status_code == 200:
             data = response.json()
             results = data.get("results", [])
@@ -1024,7 +1033,7 @@ def _detect_plates(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
     Returns dict with 'detections' list of {bbox, confidence} and 'processing_time_ms'."""
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
-        response = requests.post(f"{ENGINE_URL}/detect", files=files, timeout=10)
+        response = _engine_http.post(f"{ENGINE_URL}/detect", files=files, timeout=10)
         if response.status_code == 200:
             return response.json()
         else:
@@ -1039,7 +1048,7 @@ def _ocr_plate(jpeg_bytes: bytes, filename: str = "crop.jpg") -> dict:
     Returns dict with 'plate', 'confidence', 'processing_time_ms'."""
     try:
         files = {'file': (filename, jpeg_bytes, 'image/jpeg')}
-        response = requests.post(f"{ENGINE_URL}/ocr", files=files, timeout=10)
+        response = _engine_http.post(f"{ENGINE_URL}/ocr", files=files, timeout=10)
         if response.status_code == 200:
             data = response.json()
             plate = apply_corrections(data.get("plate", ""))
@@ -1507,67 +1516,70 @@ def rtsp_processor_thread():
             
             # --- Session Finalization (Timeout check) ---
             if rtsp_active_session["is_active"] and (now_str - rtsp_active_session["last_seen_time"] > 20):
-                # 20 seconds passed without detecting a plate -> finalize event
-                s_plate = rtsp_active_session["best_plate"]
-                s_conf = rtsp_active_session["best_conf"]
-                s_dec = rtsp_active_session["decision"]
-                s_imgs = rtsp_active_session["images"]
+                # 20 Sekunden ohne Erkennung → Session finalisieren
+                s_plate      = rtsp_active_session["best_plate"]
+                s_conf       = rtsp_active_session["best_conf"]
+                s_imgs       = list(rtsp_active_session["images"])  # Snapshot für Background-Thread
+                s_triggered  = rtsp_active_session.get("has_triggered", False)
+                s_ts         = rtsp_active_session.get("trigger_timestamp")
 
-                # Re-do match just to be safe it's correct for the final selected plate
+                # Re-match für finale Entscheidung
                 s_matched_plate, s_match_score, s_dec_final = fuzzy_match_plate(s_plate)
 
-                logger.info(f"📹 RTSP: Finalizing session for '{s_plate}' after 20s timeout. {len(s_imgs)} frames collected.")
-                
+                logger.info(f"📹 RTSP: Session abgeschlossen — '{s_plate}' ({len(s_imgs)} Frames). DB-Write im Background...")
+
                 rtsp_status["detections"] += 1
                 rtsp_status["last_plate"] = s_plate
                 rtsp_status["last_confidence"] = round(s_conf, 2)
-                
-                db = SessionLocal()
-                try:
-                    event = models.Event(
-                        timestamp=datetime.now(),
-                        detected_plate=s_plate,
-                        confidence=f"{s_conf:.4f}",
-                        decision=s_dec_final,
-                        series_id=f"rtsp_{cam_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                        image_count=len(s_imgs),
-                        matched_plate=s_matched_plate,
-                        match_score=s_match_score,
-                        ha_triggered=rtsp_active_session.get("has_triggered", False),
-                        trigger_timestamp=rtsp_active_session.get("trigger_timestamp"),
-                        processing_time_ms=s_imgs[0]["proc_ms"] if s_imgs else None,
-                        recognition_source="fast_alpr",
-                    )
-                    db.add(event)
-                    db.flush()
 
-                    for i, img_data in enumerate(s_imgs):
-                        event_image = models.EventImage(
-                            event_id=event.id,
-                            filename=f"rtsp_{cam_name}_{datetime.now().strftime('%H%M%S')}_{i}.jpg",
-                            image_data=img_data["jpeg_bytes"],
-                            detected_plate=img_data["plate"],
-                            confidence=img_data["confidence"],
-                            has_plate=img_data["has_plate"],
-                            is_trigger=(i == 0),
-                            processing_time_ms=img_data["proc_ms"],
-                            recognition_source=img_data.get("source", "fast_alpr"),
-                            plate_crop_data=img_data.get("crop_jpeg"),
+                # DB-Write in Background-Thread — blockiert den Analysis-Loop NICHT mehr
+                def _finalize_session(plate, conf, matched, score, decision, imgs, triggered, trigger_ts, c_name):
+                    db = SessionLocal()
+                    try:
+                        event = models.Event(
+                            timestamp=datetime.now(),
+                            detected_plate=plate,
+                            confidence=f"{conf:.4f}",
+                            decision=decision,
+                            series_id=f"rtsp_{c_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                            image_count=len(imgs),
+                            matched_plate=matched,
+                            match_score=score,
+                            ha_triggered=triggered,
+                            trigger_timestamp=trigger_ts,
+                            processing_time_ms=imgs[0]["proc_ms"] if imgs else None,
+                            recognition_source="fast_alpr",
                         )
-                        db.add(event_image)
-                    
-                    db.commit()
-                    logger.info(f"📹 RTSP: Consolidated Event #{event.id} created successfully!")
+                        db.add(event)
+                        db.flush()
+                        for i, img_data in enumerate(imgs):
+                            db.add(models.EventImage(
+                                event_id=event.id,
+                                filename=f"rtsp_{c_name}_{datetime.now().strftime('%H%M%S')}_{i}.jpg",
+                                image_data=img_data["jpeg_bytes"],
+                                detected_plate=img_data["plate"],
+                                confidence=img_data["confidence"],
+                                has_plate=img_data["has_plate"],
+                                is_trigger=(i == 0),
+                                processing_time_ms=img_data["proc_ms"],
+                                recognition_source=img_data.get("source", "fast_alpr"),
+                                plate_crop_data=img_data.get("crop_jpeg"),
+                            ))
+                        db.commit()
+                        logger.info(f"📹 RTSP: Event #{event.id} gespeichert (Background).")
+                    except Exception as e:
+                        db.rollback()
+                        logger.error(f"📹 RTSP: DB-Fehler bei Session-Finalisierung: {e}")
+                    finally:
+                        db.close()
 
-                    # Note: HA/MQTT trigger was already fired immediately upon first match!
+                _db_write_pool.submit(
+                    _finalize_session,
+                    s_plate, s_conf, s_matched_plate, s_match_score, s_dec_final,
+                    s_imgs, s_triggered, s_ts, cam_name
+                )
 
-                except Exception as e:
-                    db.rollback()
-                    logger.error(f"📹 RTSP: DB error during session finalization: {e}")
-                finally:
-                    db.close()
-                
-                # Reset session
+                # Session sofort zurücksetzen — kein Warten auf DB-Write
                 rtsp_active_session = {
                     "is_active": False,
                     "last_seen_time": 0.0,
@@ -1575,8 +1587,9 @@ def rtsp_processor_thread():
                     "best_plate": "",
                     "best_conf": 0.0,
                     "best_match_score": 0.0,
-                    "decision": "DENIED",
-                    "has_triggered": False
+                    "decision": "denied",
+                    "has_triggered": False,
+                    "matched_plate": "",
                 }
 
             _t_total = time.time() - _t0
