@@ -1025,25 +1025,37 @@ def analyze_with_paddleocr(jpeg_bytes: bytes) -> dict:
             return {"plate": "", "confidence": 0.0, "processing_time_ms": None, "source": "paddleocr"}
 
         api_v5 = getattr(ocr, '_api_v5', False)
+        results_flat = []
         if api_v5:
             raw = ocr.predict(img)
-            # PP-OCRv5 gibt Liste von Dicts zurück: [{'rec_text': ..., 'rec_score': ...}]
-            results_flat = []
-            if raw:
+            # PP-OCRv5 / PaddleX: predict() gibt Generator/Liste von OCRResult-Objekten zurück
+            # OCRResult hat: rec_texts (list[str]), rec_scores (list[float])
+            # Alternativ: dict mit 'rec_text'/'rec_score' oder list-of-list
+            if raw is not None:
                 for item in raw:
-                    if isinstance(item, dict):
-                        text = item.get('rec_text', '')
-                        conf = float(item.get('rec_score', 0.0))
-                        results_flat.append((text, conf))
+                    # OCRResult-Objekt (PaddleX API)
+                    if hasattr(item, 'rec_texts') and hasattr(item, 'rec_scores'):
+                        for t, c in zip(item.rec_texts, item.rec_scores):
+                            results_flat.append((str(t), float(c)))
+                    # Dict-Format
+                    elif isinstance(item, dict):
+                        t = item.get('rec_text', item.get('text', ''))
+                        c = float(item.get('rec_score', item.get('confidence', 0.0)))
+                        if t:
+                            results_flat.append((t, c))
+                    # List-Format [[box, [text, conf]], ...]
                     elif isinstance(item, list):
                         for subitem in item:
-                            if isinstance(subitem, dict):
-                                text = subitem.get('rec_text', '')
-                                conf = float(subitem.get('rec_score', 0.0))
-                                results_flat.append((text, conf))
+                            if isinstance(subitem, list) and len(subitem) >= 2 and isinstance(subitem[1], (list, tuple)):
+                                results_flat.append((str(subitem[1][0]), float(subitem[1][1])))
+                            elif isinstance(subitem, dict):
+                                t = subitem.get('rec_text', subitem.get('text', ''))
+                                c = float(subitem.get('rec_score', subitem.get('confidence', 0.0)))
+                                if t:
+                                    results_flat.append((t, c))
+            logger.info(f"PaddleOCR v5 raw type={type(list(raw) if hasattr(raw,'__iter__') else raw).__name__}, results_flat={results_flat}")
         else:
             raw = ocr.ocr(img, cls=True)
-            results_flat = []
             if raw and raw[0]:
                 for line in raw[0]:
                     results_flat.append((line[1][0], float(line[1][1])))
