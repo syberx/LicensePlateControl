@@ -542,8 +542,10 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320):
 
             if hires_crop.size > 0:
                 _, crop_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                crop_b64 = base64.b64encode(crop_buf.tobytes()).decode('ascii')
-                crop_jpeg_bytes = crop_buf.tobytes()
+                from watcher import _preprocess_crop_for_ocr
+                crop_jpeg_bytes = _preprocess_crop_for_ocr(crop_buf.tobytes())
+                # Show preprocessed crop in UI
+                crop_b64 = base64.b64encode(crop_jpeg_bytes).decode('ascii')
 
             steps.append({
                 "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
@@ -576,34 +578,48 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320):
 
                 # --- Step 6b: PaddleOCR (immer im Debug — Vergleich) ---
                 try:
-                    from watcher import analyze_with_paddleocr
+                    from watcher import analyze_with_paddleocr, _get_paddle_ocr
                     t0 = time.time()
-                    paddle_result = analyze_with_paddleocr(crop_jpeg_bytes)
-                    p_plate = paddle_result.get("plate", "")
-                    p_conf = paddle_result.get("confidence", 0.0)
-                    p_ms = paddle_result.get("processing_time_ms")
 
-                    winner = ""
-                    if plate and plate != "UNKNOWN" and p_plate and p_plate != "UNKNOWN":
-                        winner = f" — Fast ALPR {'besser' if confidence >= p_conf else 'schlechter'} als PaddleOCR"
-                    elif p_plate and p_plate != "UNKNOWN":
-                        winner = " — PaddleOCR hat gewonnen!"
-                    elif plate and plate != "UNKNOWN":
-                        winner = " — Fast ALPR hat gewonnen!"
+                    # Prüfen ob PaddleOCR überhaupt verfügbar ist
+                    paddle_available = _get_paddle_ocr() is not None
+                    if not paddle_available:
+                        steps.append({
+                            "step": "6b", "name": "PaddleOCR (Vergleich)",
+                            "description": "⚠ PaddleOCR nicht verfügbar — nicht installiert oder Init-Fehler (siehe Container-Log)",
+                            "image_b64": None,
+                            "duration_ms": round((time.time() - t0) * 1000, 1),
+                            "details": {"status": "not_available"},
+                        })
+                    else:
+                        paddle_result = analyze_with_paddleocr(crop_jpeg_bytes)
+                        p_plate = paddle_result.get("plate", "")
+                        p_conf = paddle_result.get("confidence", 0.0)
+                        p_ms = paddle_result.get("processing_time_ms")
 
-                    steps.append({
-                        "step": "6b", "name": "PaddleOCR (Vergleich)",
-                        "description": f"Erkannt: '{p_plate}' (Conf: {p_conf:.2f}, {p_ms or 0:.0f}ms){winner}" if p_plate and p_plate != "UNKNOWN" else f"Nicht erkannt ({p_ms or 0:.0f}ms){winner}",
-                        "image_b64": crop_b64,
-                        "duration_ms": round((time.time() - t0) * 1000, 1),
-                        "details": {"plate": p_plate, "confidence": p_conf, "engine_ms": p_ms, "mode": "paddleocr",
-                                    "fast_alpr_result": plate, "fast_alpr_conf": confidence},
-                    })
+                        winner = ""
+                        if plate and plate != "UNKNOWN" and p_plate and p_plate != "UNKNOWN":
+                            winner = f" — Fast ALPR {'besser ✓' if confidence >= p_conf else 'schlechter ✗'} als PaddleOCR"
+                        elif p_plate and p_plate != "UNKNOWN":
+                            winner = " — PaddleOCR hat gewonnen! 🏆"
+                        elif plate and plate != "UNKNOWN":
+                            winner = " — Fast ALPR hat gewonnen! 🏆"
+                        else:
+                            winner = " — beide ohne Ergebnis"
 
-                    # Bestes Ergebnis gewinnt
-                    if p_plate and p_plate != "UNKNOWN" and p_conf > confidence:
-                        plate = p_plate
-                        confidence = p_conf
+                        steps.append({
+                            "step": "6b", "name": "PaddleOCR (Vergleich)",
+                            "description": f"Erkannt: '{p_plate}' (Conf: {p_conf:.2f}, {p_ms or 0:.0f}ms){winner}" if p_plate and p_plate != "UNKNOWN" else f"Nicht erkannt ({p_ms or 0:.0f}ms){winner}",
+                            "image_b64": None,
+                            "duration_ms": round((time.time() - t0) * 1000, 1),
+                            "details": {"plate": p_plate, "confidence": p_conf, "engine_ms": p_ms, "mode": "paddleocr",
+                                        "fast_alpr_result": plate, "fast_alpr_conf": confidence},
+                        })
+
+                        # Bestes Ergebnis gewinnt
+                        if p_plate and p_plate != "UNKNOWN" and p_conf > confidence:
+                            plate = p_plate
+                            confidence = p_conf
                 except Exception as e:
                     steps.append({
                         "step": "6b", "name": "PaddleOCR (Vergleich)",

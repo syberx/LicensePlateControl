@@ -913,6 +913,45 @@ def _detect_plates(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
     return {"detections": [], "processing_time_ms": None}
 
 
+def _preprocess_crop_for_ocr(jpeg_bytes: bytes) -> bytes:
+    """Preprocess license plate crop for better OCR accuracy.
+    - Upscale if too small (min 80px height)
+    - CLAHE contrast enhancement
+    - Light sharpening
+    Returns preprocessed JPEG bytes."""
+    try:
+        import cv2
+        import numpy as np
+        arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jpeg_bytes
+        h, w = img.shape[:2]
+
+        # Upscale: Kennzeichen OCR braucht mindestens ~80px Höhe
+        min_h = 90
+        if h < min_h:
+            scale = min_h / h
+            img = cv2.resize(img, (int(w * scale), min_h), interpolation=cv2.INTER_CUBIC)
+            h, w = img.shape[:2]
+
+        # CLAHE Kontrast (nur Luminanz-Kanal)
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
+        l = clahe.apply(l)
+        img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+
+        # Leichtes Schärfen
+        kernel = np.array([[0, -0.4, 0], [-0.4, 2.6, -0.4], [0, -0.4, 0]])
+        img = cv2.filter2D(img, -1, kernel)
+
+        _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        return buf.tobytes()
+    except Exception:
+        return jpeg_bytes
+
+
 def _ocr_plate(jpeg_bytes: bytes, filename: str = "crop.jpg") -> dict:
     """Pass 2: Send plate crop JPEG to engine /ocr endpoint — OCR only.
     Returns dict with 'plate', 'confidence', 'processing_time_ms'."""
@@ -1377,7 +1416,7 @@ def rtsp_processor_thread():
                     if ox2 > ox1 and oy2 > oy1:
                         hires_crop = frame[oy1:oy2, ox1:ox2]
                         _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        crop_jpeg_bytes = hires_buf.tobytes()
+                        crop_jpeg_bytes = _preprocess_crop_for_ocr(hires_buf.tobytes())
 
                         # --- Pass 2: OCR on hi-res crop ---
                         rtsp_status["_ocr_calls"] = rtsp_status.get("_ocr_calls", 0) + 1
