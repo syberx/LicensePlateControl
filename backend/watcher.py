@@ -842,42 +842,6 @@ def _detect_plates(jpeg_bytes: bytes, filename: str = "frame.jpg") -> dict:
     return {"detections": [], "processing_time_ms": None}
 
 
-def _preprocess_crop_for_ocr(jpeg_bytes: bytes, enhance: bool = True) -> bytes:
-    """Preprocess license plate crop for better OCR accuracy.
-    - Upscale nur wenn wirklich klein (< 80px Höhe) — große Crops NICHT hochskalieren
-    - CLAHE + leichtes Schärfen nur wenn enhance=True
-    Returns preprocessed JPEG bytes."""
-    try:
-        import cv2
-        import numpy as np
-        arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            return jpeg_bytes
-        h, w = img.shape[:2]
-
-        # Upscale nur bei echten Miniaturcrops (< 80px) — bei größeren Bildern verschlechtert 2x-Upscale die OCR
-        if h < 80:
-            scale = 80 / h
-            img = cv2.resize(img, (int(w * scale), 80), interpolation=cv2.INTER_LANCZOS4)
-            h, w = img.shape[:2]
-
-        if enhance:
-            # CLAHE Kontrast — nur bei dunklen/kontrastarmen Bildern sinnvoll
-            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            tile_h = max(2, h // 8)
-            tile_w = max(2, w // 16)
-            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(tile_w, tile_h))
-            l = clahe.apply(l)
-            img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-
-        _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        return buf.tobytes()
-    except Exception:
-        return jpeg_bytes
-
-
 def _ocr_plate(jpeg_bytes: bytes, filename: str = "crop.jpg") -> dict:
     """Pass 2: Send plate crop JPEG to engine /ocr endpoint — OCR only.
     Returns dict with 'plate', 'confidence', 'processing_time_ms'."""
@@ -1256,8 +1220,7 @@ def rtsp_processor_thread():
                     if ox2 > ox1 and oy2 > oy1:
                         hires_crop = frame[oy1:oy2, ox1:ox2]
                         _, hires_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        # Preprocessing immer anwenden — verbessert OCR-Genauigkeit (Upscale+CLAHE+Schärfen)
-                        crop_jpeg_bytes = _preprocess_crop_for_ocr(hires_buf.tobytes())
+                        crop_jpeg_bytes = hires_buf.tobytes()
 
                         # --- Pass 2: OCR on hi-res crop ---
                         rtsp_status["_ocr_calls"] = rtsp_status.get("_ocr_calls", 0) + 1

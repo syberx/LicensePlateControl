@@ -349,11 +349,11 @@ def get_debug_stats():
 # --- Debug Pipeline: Step-by-step RTSP simulation ---
 
 @router.post("/api/debug/pipeline")
-async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, preprocess: bool = True):
+async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, preprocess: bool = False):
     """Simulate the full RTSP 2-pass pipeline on an uploaded image.
     Returns step-by-step results with intermediate images (base64), timings, and metadata.
     detect_width: YOLO detection resolution (320/416/640). Lower = faster but less accurate.
-    preprocess: Apply CLAHE+Schärfen auf den Crop vor OCR."""
+    preprocess: Unused (kept for API compat). RAW crops perform best — no preprocessing."""
     import cv2
     import numpy as np
     import base64
@@ -574,14 +574,10 @@ async def debug_pipeline(file: UploadFile = File(...), detect_width: int = 320, 
 
             if hires_crop.size > 0:
                 _, crop_buf = cv2.imencode('.jpg', hires_crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                from watcher import _preprocess_crop_for_ocr
-                raw_crop_bytes = crop_buf.tobytes()
-                # Upscale immer, CLAHE+Schärfen nur wenn preprocess=True
-                crop_jpeg_bytes = _preprocess_crop_for_ocr(raw_crop_bytes, enhance=preprocess)
-                # Show the crop that OCR actually receives
+                crop_jpeg_bytes = crop_buf.tobytes()
                 crop_b64 = base64.b64encode(crop_jpeg_bytes).decode('ascii')
 
-            prep_label = " + CLAHE+Schärfen" if preprocess else " (nur Upscale wenn klein)"
+            prep_label = " (RAW, kein Preprocessing)"
             steps.append({
                 "step": 5, "name": "BBox-Mapping + Hi-Res Crop",
                 "description": f"YOLO-BBox (auf {new_w}x{new_h}) → zurück auf Original {orig_w}x{orig_h} → Crop: {crop_w}x{crop_h}px{prep_label} | Crop aus ORIGINAL-Bild ✓",
