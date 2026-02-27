@@ -34,6 +34,7 @@ services:
       - HA_URL=http://homeassistant.local:8123
       - HA_TOKEN=optional_long_lived_access_token
       - HA_SERVICE=/api/services/cover/open_cover
+      - PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
     depends_on:
       - engine
       - postgres
