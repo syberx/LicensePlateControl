@@ -58,7 +58,7 @@ services:
     environment:
       - TZ=Europe/Berlin
       - HF_HOME=/models
-      - ORT_OPENVINO_DEVICE=GPU   # Tell onnxruntime-openvino to use Intel GPU (falls back to CPU if unavailable)
+      - ORT_OPENVINO_DEVICE=CPU   # CPU ist schneller als Intel iGPU mit onnxruntime-openvino 1.23.0
       - OV_CACHE_DIR=/root/.cache/openvino
     # Intel iGPU passthrough for OpenVINO acceleration
     devices:
