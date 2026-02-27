@@ -676,7 +676,7 @@
                             <!-- Preview Image (refreshes every poll tick) -->
                             <div x-show="status.state === 'connected' || status.state === 'connecting'"
                                 style="margin-bottom: 0.75rem;">
-                                <img :src="'/api/rtsp/preview?t=' + pollTick" id="rtsp-preview-img"
+                                <img :src="($parent && $parent.tab === 'rtsp') ? '/api/rtsp/preview?t=' + pollTick : 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='" id="rtsp-preview-img"
                                     style="width:100%; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); max-height: 220px; object-fit: cover;"
                                     alt="RTSP Vorschau" onerror="this.style.display='none'"
                                     onload="this.style.display='block'">
@@ -867,21 +867,27 @@
                                     </div>
                                 </div>
 
-                                <!-- Zeiten-Übersicht (für RTSP: Detection muss schnell sein, OCR nur bei Treffer) -->
+                                <!-- Zeiten-Übersicht: klare Tabelle -->
                                 <div style="margin-bottom: 0.75rem; padding: 0.75rem; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
                                     <div style="font-size: 0.7rem; color: rgba(255,255,255,0.5); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.5px;">⏱ Zeiten pro Schritt</div>
-                                    <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 0.25rem 1rem; font-size: 0.8rem; align-items: center;">
-                                        <template x-for="step in debugPipelineResult.steps" :key="step.step">
-                                            <div style="display: contents;">
-                                                <span :style="(step.name && step.name.includes('detect')) ? 'color: #60a5fa; font-weight: 600;' : 'color: rgba(255,255,255,0.85);'"
-                                                    x-text="step.name"></span>
-                                                <span style="color: #fbbf24; font-weight: 600; text-align: right;"
-                                                    x-text="step.duration_ms + ' ms'"></span>
-                                                <span x-show="step.name && step.name.includes('detect')"
-                                                    style="font-size: 0.65rem; color: #60a5fa; white-space: nowrap;">← RTSP-kritisch</span>
-                                            </div>
-                                        </template>
-                                    </div>
+                                    <table style="width:100%; font-size: 0.8rem; border-collapse: collapse;">
+                                        <thead>
+                                            <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+                                                <th style="text-align:left; padding: 0.25rem 0.5rem 0.25rem 0; color: rgba(255,255,255,0.5); font-weight: 500;">Schritt</th>
+                                                <th style="text-align:right; padding: 0.25rem 0; color: rgba(255,255,255,0.5); font-weight: 500;">Zeit</th>
+                                                <th style="text-align:left; padding: 0.25rem 0 0.25rem 0.5rem; color: rgba(255,255,255,0.5); font-weight: 500; width: 100px;"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <template x-for="step in debugPipelineResult.steps" :key="step.step">
+                                                <tr :style="(step.name && step.name.includes('detect')) ? 'background: rgba(96,165,250,0.08);' : ''">
+                                                    <td style="padding: 0.35rem 0.5rem 0.35rem 0; color: #e0e0e0;" x-text="step.name"></td>
+                                                    <td style="padding: 0.35rem 0; text-align: right; color: #fbbf24; font-weight: 600;" x-text="step.duration_ms + ' ms'"></td>
+                                                    <td style="padding: 0.35rem 0 0.35rem 0.5rem; font-size: 0.65rem; color: #60a5fa;" x-text="(step.name && step.name.includes('detect')) ? 'RTSP-kritisch' : ''"></td>
+                                                </tr>
+                                            </template>
+                                        </tbody>
+                                    </table>
                                     <p style="font-size: 0.65rem; color: rgba(255,255,255,0.4); margin-top: 0.5rem; margin-bottom: 0;">
                                         Bei 1 Bild/s RTSP: Nur Detection muss &lt;1000ms sein. OCR läuft erst wenn Kennzeichen gefunden.
                                     </p>
@@ -909,14 +915,17 @@
                                     </div>
                                 </template>
 
-                                <!-- Kopieren-Button -->
-                                <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                <!-- Debug-Text zum Kopieren (funktioniert auch ohne HTTPS/Clipboard-API) -->
+                                <details style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08);">
+                                    <summary style="cursor: pointer; font-size: 0.85rem; color: #818cf8; font-weight: 600;">📋 Debug-Text zum Kopieren (aufklappen, markieren, Strg+C)</summary>
+                                    <pre id="debug-copy-text" style="margin-top: 0.5rem; padding: 0.75rem; background: rgba(0,0,0,0.4); border-radius: 6px; font-size: 0.75rem; color: #e0e0e0; overflow-x: auto; white-space: pre-wrap; user-select: all; -webkit-user-select: all;"
+                                        x-text="getDebugCopyText()"></pre>
                                     <button @click="copyResultsToClipboard()"
-                                        style="padding: 0.5rem 1rem; background: rgba(129,140,248,0.2); color: #818cf8; border: 1px solid rgba(129,140,248,0.4); border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem;">
-                                        📋 Ergebnisse kopieren
+                                        style="margin-top: 0.5rem; padding: 0.4rem 0.8rem; background: rgba(129,140,248,0.2); color: #818cf8; border: 1px solid rgba(129,140,248,0.4); border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer;">
+                                        📋 In Zwischenablage kopieren
                                     </button>
                                     <span x-show="copyFeedback" x-transition style="margin-left: 0.5rem; font-size: 0.75rem; color: #34d399;">✓ Kopiert!</span>
-                                </div>
+                                </details>
                             </div>
                         </template>
                     </div>
@@ -1146,8 +1155,8 @@
                 debugPipelineResult: null,
                 copyFeedback: false,
 
-                copyResultsToClipboard() {
-                    if (!this.debugPipelineResult) return;
+                getDebugCopyText() {
+                    if (!this.debugPipelineResult) return '';
                     const r = this.debugPipelineResult;
                     let txt = '=== LicensePlateControl Pipeline-Test ===\n';
                     txt += 'Kennzeichen: ' + (r.final_plate || 'Nichts erkannt') + '\n';
@@ -1159,10 +1168,33 @@
                         txt += '#' + s.step + ' ' + (s.name || '') + ': ' + (s.duration_ms || 0) + ' ms' + kritisch + '\n';
                     });
                     txt += '\n(Bei 1 Bild/s RTSP: Detection muss <1000ms sein. OCR läuft erst bei Treffer.)\n';
-                    navigator.clipboard.writeText(txt).then(() => {
-                        this.copyFeedback = true;
-                        setTimeout(() => { this.copyFeedback = false; }, 2000);
-                    }).catch(() => alert('Kopieren fehlgeschlagen'));
+                    return txt;
+                },
+
+                copyResultsToClipboard() {
+                    if (!this.debugPipelineResult) return;
+                    const txt = this.getDebugCopyText();
+                    const fallback = () => {
+                        const ta = document.createElement('textarea');
+                        ta.value = txt;
+                        ta.style.position = 'fixed'; ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try {
+                            document.execCommand('copy');
+                            this.copyFeedback = true;
+                            setTimeout(() => { this.copyFeedback = false; }, 2000);
+                        } catch (e) { alert('Kopieren fehlgeschlagen. Bitte manuell markieren und Strg+C.'); }
+                        document.body.removeChild(ta);
+                    };
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(txt).then(() => {
+                            this.copyFeedback = true;
+                            setTimeout(() => { this.copyFeedback = false; }, 2000);
+                        }).catch(fallback);
+                    } else {
+                        fallback();
+                    }
                 },
 
                 async resizeImageIfNeeded(file, maxW = 1920, maxH = 1080, quality = 0.85) {
@@ -1249,6 +1281,7 @@
                 },
 
                 async fetchStatus() {
+                    if (this.$parent && this.$parent.tab !== 'rtsp') return;
                     try {
                         const res = await fetch('/api/rtsp/status');
                         if (res.ok) this.status = await res.json();
