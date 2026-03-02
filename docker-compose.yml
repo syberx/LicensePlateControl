@@ -65,6 +65,16 @@ services:
       - /dev/dri:/dev/dri
     group_add:
       - "992"   # render group GID (from: getent group render → render:x:992:)
+    # Memory-Limit: Engine akkumuliert nach Tagen RAM (OpenVINO/YOLO-Caches).
+    # Bei 700MB-Überschreitung OOM-Kill → Docker restart bringt frischen State.
+    mem_limit: 700m
+    memswap_limit: 700m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - lpc-network
 
