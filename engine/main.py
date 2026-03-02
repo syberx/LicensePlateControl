@@ -115,8 +115,8 @@ def init_alpr():
             _stats["two_pass_mode"] = "fallback"
 
         # open-image-models >=0.5.x: conf_thresh auf dem inneren LicensePlateDetector senken.
-        # Standard ist 0.25 — reale Kennzeichen bei Kamera-Aufnahmen erreichen oft nur 0.05-0.15.
-        _DETECT_CONF_THRESH = 0.10
+        # Standard ist 0.25 — reale Kennzeichen bei Outdoor-Kameras erreichen nur 0.05-0.15.
+        _DETECT_CONF_THRESH = 0.05
         if _detector:
             inner_det = getattr(_detector, "detector", _detector)
             if hasattr(inner_det, "conf_thresh"):
