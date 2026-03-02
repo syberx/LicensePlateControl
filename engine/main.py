@@ -122,10 +122,10 @@ def init_alpr():
         else:
             _stats["two_pass_mode"] = "fallback"
 
-        # Confidence-Threshold für Outdoor-Kameras.
-        # open-image-models 0.5.x Standard 0.25 — reale Kennzeichen 0.05-0.15.
-        # 0.15 als Kompromiss: fängt echte Platten, filtert Rauschen/Schatten.
-        _DETECT_CONF_THRESH = 0.15
+        # YOLO Detection-Threshold niedrig halten — nur Vorfilter für OCR.
+        # Reale Outdoor-Kennzeichen erreichen nur 0.05-0.15 YOLO-Confidence.
+        # Die eigentliche False-Positive-Filterung passiert über OCR-Confidence (≥80% im Backend).
+        _DETECT_CONF_THRESH = 0.05
         if _detector and hasattr(_detector, "conf_thresh"):
             old_thresh = _detector.conf_thresh
             _detector.conf_thresh = _DETECT_CONF_THRESH
