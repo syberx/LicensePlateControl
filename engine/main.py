@@ -114,6 +114,16 @@ def init_alpr():
         else:
             _stats["two_pass_mode"] = "fallback"
 
+        # open-image-models >=0.5.x: conf_thresh auf dem inneren LicensePlateDetector senken.
+        # Standard ist 0.25 — reale Kennzeichen bei Kamera-Aufnahmen erreichen oft nur 0.05-0.15.
+        _DETECT_CONF_THRESH = 0.10
+        if _detector:
+            inner_det = getattr(_detector, "detector", _detector)
+            if hasattr(inner_det, "conf_thresh"):
+                old_thresh = inner_det.conf_thresh
+                inner_det.conf_thresh = _DETECT_CONF_THRESH
+                print(f"INFO: Detector conf_thresh: {old_thresh} -> {_DETECT_CONF_THRESH}")
+
         print(f"INFO: ALPR v{VERSION} initialized - yolo-v9-t-256 + cct-s-v1 OCR (device: {_ov_device})")
         print(f"INFO: 2-pass mode: {'NATIVE' if two_pass else 'FALLBACK (using alpr.predict for both endpoints)'}")
         return True
