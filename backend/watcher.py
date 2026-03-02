@@ -1418,7 +1418,9 @@ def rtsp_processor_thread():
             _store_debug_frame(engine_bytes, plate=plate, confidence=confidence, processing_ms=engine_ms)
 
             # --- Intelligent Event Grouping Logic Starts Here ---
-            is_real_plate = bool(plate and plate != "UNKNOWN" and confidence > 0.3)
+            # OCR-Confidence ≥ 80% als Pflicht — vermeidet False-Positive Events
+            # (Personen, Zaunmuster, Schatten die als Kennzeichen fehlinterpretiert werden)
+            is_real_plate = bool(plate and plate != "UNKNOWN" and confidence >= 0.80)
             orig_frame_bytes = None
             now_str = time.time()
 
