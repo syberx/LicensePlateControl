@@ -88,12 +88,20 @@ def init_alpr():
         print(f"INFO: ALPR attributes: {[a for a in dir(alpr) if not a.startswith('__')]}")
 
         # Try multiple known attribute names for detector
+        # Bei open-image-models >=0.5.x: DefaultDetector wraps LicensePlateDetector.
+        # Wir wollen den INNEREN Detector direkt nutzen, damit conf_thresh sicher greift.
         for attr_name in ['detector', '_detector', 'plate_detector', 'det_model', 'det']:
             candidate = getattr(alpr, attr_name, None)
             if candidate is not None:
-                _detector = candidate
-                print(f"INFO: Found detector at alpr.{attr_name} — type: {type(_detector).__name__}")
-                if hasattr(_detector, 'predict'):
+                # Unwrap DefaultDetector → inneren LicensePlateDetector holen
+                inner = getattr(candidate, "detector", candidate)
+                if hasattr(inner, "predict") and hasattr(inner, "conf_thresh"):
+                    _detector = inner
+                    print(f"INFO: Found inner detector at alpr.{attr_name}.detector — type: {type(_detector).__name__}")
+                elif hasattr(candidate, "predict"):
+                    _detector = candidate
+                    print(f"INFO: Found detector at alpr.{attr_name} — type: {type(_detector).__name__}")
+                if _detector and hasattr(_detector, 'predict'):
                     print(f"INFO: Detector has .predict() method")
                 break
 
@@ -114,15 +122,13 @@ def init_alpr():
         else:
             _stats["two_pass_mode"] = "fallback"
 
-        # open-image-models >=0.5.x: conf_thresh auf dem inneren LicensePlateDetector senken.
-        # Standard ist 0.25 — reale Kennzeichen bei Outdoor-Kameras erreichen nur 0.05-0.15.
+        # Confidence-Threshold für Outdoor-Kameras senken.
+        # open-image-models 0.5.x Standard ist 0.25 — reale Kennzeichen nur 0.05-0.15.
         _DETECT_CONF_THRESH = 0.05
-        if _detector:
-            inner_det = getattr(_detector, "detector", _detector)
-            if hasattr(inner_det, "conf_thresh"):
-                old_thresh = inner_det.conf_thresh
-                inner_det.conf_thresh = _DETECT_CONF_THRESH
-                print(f"INFO: Detector conf_thresh: {old_thresh} -> {_DETECT_CONF_THRESH}")
+        if _detector and hasattr(_detector, "conf_thresh"):
+            old_thresh = _detector.conf_thresh
+            _detector.conf_thresh = _DETECT_CONF_THRESH
+            print(f"INFO: Detector conf_thresh: {old_thresh} -> {_DETECT_CONF_THRESH}")
 
         print(f"INFO: ALPR v{VERSION} initialized - yolo-v9-t-256 + cct-s-v1 OCR (device: {_ov_device})")
         print(f"INFO: 2-pass mode: {'NATIVE' if two_pass else 'FALLBACK (using alpr.predict for both endpoints)'}")
