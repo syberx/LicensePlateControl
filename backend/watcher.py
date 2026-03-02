@@ -1140,9 +1140,8 @@ def rtsp_reader_thread():
                     time.sleep(10)
                     continue
 
-            # Frame lesen — max ~8fps um H.264-Dekodierung CPU-Last zu begrenzen.
-            # Der Processor analysiert alle 3s, also reichen 8fps für frische Frames.
-            # Ohne Throttle: Reader dekodiert 25fps H.264 → ~90% CPU auf schwacher HW!
+            # Frame lesen — bei 4fps blockiert cap.read() natürlich ~250ms je Frame.
+            # sleep(0.1) als Mindest-Pause für den Fall höherer Kamera-FPS (Fallback-Schutz).
             ret, frame = cap.read()
             if not ret or frame is None:
                 consecutive_fails += 1
@@ -1164,8 +1163,8 @@ def rtsp_reader_thread():
             with rtsp_frame_lock:
                 rtsp_latest_frame_data = frame
 
-            # Throttle: max ~8fps → spart ~70% CPU gegenüber unkontrolliertem 25fps-Loop
-            time.sleep(0.125)
+            # Mindest-Pause: verhindert busy-loop falls Kamera unerwartet viele Frames schickt
+            time.sleep(0.1)
 
         except Exception as e:
             logger.error(f"📹 RTSP Reader Error: {e}")
