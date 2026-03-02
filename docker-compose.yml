@@ -70,11 +70,11 @@ services:
     mem_limit: 700m
     memswap_limit: 700m
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8000/health"]
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s  # OpenVINO JIT-Kompilierung + Modell-Laden braucht ~60-90s
     networks:
       - lpc-network
 

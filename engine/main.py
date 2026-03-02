@@ -247,6 +247,38 @@ def run_selftest():
 
         print(f"SELFTEST: Pipeline operational — {elapsed_ms:.0f}ms total")
 
+        # Pre-Warm OpenVINO für typische Kennzeichen-Crop-Größen.
+        # ONNX Runtime / OpenVINO kompiliert das Modell beim ERSTEN Aufruf
+        # jeder neuen Eingabegröße neu (JIT) — das kostet 2-5 Sekunden.
+        # Durch Vorausführung hier sind alle gängigen Größen schon kompiliert
+        # bevor der erste echte RTSP-Frame ankommt.
+        if _ocr_model and hasattr(_ocr_model, 'predict'):
+            print("SELFTEST: Pre-warming OCR für typische Crop-Größen (OpenVINO JIT)...")
+            warmup_sizes = [(94, 24), (128, 32), (160, 40), (200, 52), (256, 64), (320, 80)]
+            for w, h in warmup_sizes:
+                try:
+                    dummy = np.full((h, w, 3), 200, dtype=np.uint8)
+                    cv2.rectangle(dummy, (2, 2), (w-2, h-2), (180, 180, 180), -1)
+                    t_wu = time.time()
+                    _ocr_model.predict(dummy)
+                    print(f"SELFTEST:   OCR warm-up {w}x{h}: {(time.time()-t_wu)*1000:.0f}ms")
+                except Exception as wu_e:
+                    print(f"SELFTEST:   OCR warm-up {w}x{h} failed: {wu_e}")
+            print("SELFTEST: OCR warm-up abgeschlossen.")
+
+        if _detector and hasattr(_detector, 'predict'):
+            print("SELFTEST: Pre-warming Detector für typische Eingangsgrößen...")
+            det_sizes = [(256, 256), (320, 320), (384, 256)]
+            for w, h in det_sizes:
+                try:
+                    dummy = np.zeros((h, w, 3), dtype=np.uint8)
+                    t_wu = time.time()
+                    _detector.predict(dummy)
+                    print(f"SELFTEST:   Detect warm-up {w}x{h}: {(time.time()-t_wu)*1000:.0f}ms")
+                except Exception as wu_e:
+                    print(f"SELFTEST:   Detect warm-up {w}x{h} failed: {wu_e}")
+            print("SELFTEST: Detector warm-up abgeschlossen.")
+
     except Exception as e:
         print(f"SELFTEST: ERROR — {e}")
         traceback.print_exc()
